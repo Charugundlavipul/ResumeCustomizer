@@ -1,4 +1,4 @@
-# ATS-Optimized Resume Enhancer (Pipeline, MV3) — Fixed Build
+ ATS-Optimized Resume Enhancer (Pipeline, MV3) — Fixed Build
 
 This build fixes the Options page **load bug** (IDs were referenced with `#`), so your saved settings persist and repopulate after refresh. Also adds **Export/Import** for your settings.
 
