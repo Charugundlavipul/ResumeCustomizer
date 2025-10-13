@@ -1,0 +1,322 @@
+// MV3 background service worker (type: module)
+
+// ===== Utilities =====
+// MV3 background service worker (classic) — allow importScripts
+try {
+  importScripts(chrome.runtime.getURL('libs/jszip.min.js')); // exposes global JSZip
+} catch (e) {
+  console.warn('JSZip failed to load; zip compilation will be skipped.', e);
+}
+
+
+const STOPWORDS = new Set(
+  "and or the a an to of in on for with by from at as is are was were be being been into about over under this that these those it its their our your you we they i will can may might should must vs via per"
+    .split(" ")
+);
+const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9+\-#_. ]/g, " ").replace(/\s+/g, " ").trim();
+
+function naiveStem(token) {
+  let t = token.toLowerCase();
+  for (const suf of ["ing","edly","ed","es","s"]) {
+    if (t.endsWith(suf) && t.length > suf.length + 2) {
+      t = t.slice(0, -suf.length);
+      break;
+    }
+  }
+  return t;
+}
+
+function tokenize(text) { const words = normalize(text).split(" ").filter(Boolean); const keep=[]; for(const w of words){ if(!STOPWORDS.has(w)&&w.length>=3) keep.push(naiveStem(w)); } return [...new Set(keep)]; }
+function diffMissing(jdText, resumeKeywordList) { const jdTokens = tokenize(jdText); const resumeTokens = new Set((resumeKeywordList||[]).map(k=>naiveStem(k))); return jdTokens.filter(t=>!resumeTokens.has(t)).slice(0,80); }
+
+// Replace your existing findSubsections with this version
+function findSubsections(tex) {
+  const sections = [];
+  const startRe = /\\resumeSubheading\b/g;       // find each macro start
+  const beginRe = /\\begin\{itemize\}/g;
+  const endRe   = /\\end\{itemize\}/g;
+
+  let m;
+  while ((m = startRe.exec(tex)) !== null) {
+    const startIdx = m.index;
+
+    // Find the FIRST \begin{itemize} after this \resumeSubheading
+    beginRe.lastIndex = startIdx;
+    const b = beginRe.exec(tex);
+    if (!b) break; // no itemize ⇒ skip
+    const beginIdx = b.index;
+
+    // Find the FIRST \end{itemize} after that begin
+    endRe.lastIndex = beginIdx;
+    const e = endRe.exec(tex);
+    if (!e) break;
+    const endIdx = e.index;
+
+    // Extract the section name (1st brace arg) from the header area
+    const headerChunk = tex.slice(startIdx, beginIdx);
+    const nameMatch = headerChunk.match(/\\resumeSubheading\s*\{\s*([^}]*)\s*}/);
+    const name = (nameMatch ? nameMatch[1] : "Unknown").trim();
+
+    // Extract bullets body
+    const listBody = tex.slice(beginIdx + "\\begin{itemize}".length, endIdx);
+
+    // Parse bullets robustly (handles Windows/Unix newlines and indentation)
+    const bullets = [];
+    const bulletRe = /\\item\s+([\s\S]*?)(?=(?:\r?\n)\s*\\item\s+|$)/g;
+    let bm;
+    while ((bm = bulletRe.exec(listBody)) !== null) {
+      bullets.push(bm[1].trim());
+    }
+
+    sections.push({ name, bullets, _beginIdx: beginIdx, _endIdx: endIdx });
+    // Continue search after this endIdx
+    startRe.lastIndex = endIdx;
+  }
+  return sections;
+}
+
+function replaceSectionBullets(tex, sectionName, newBullets) {
+  const rx = new RegExp(
+    "(\\\\resumeSubheading\\s*\\{\\s*" + sectionName.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&") +
+    "\\s*\\}[^]*?\\\\begin\\{itemize\\})([\\s\\S]*?)(\\\\end\\{itemize\\})",
+    "m"
+  );
+  return tex.replace(rx, (full, pre, _body, post) => {
+    const rebuilt = "\n  \\item " + newBullets.join("\n  \\item ") + "\n";
+    return pre + rebuilt + post;
+  });
+}
+
+function extractSkillLine(tex,label){ const rx=new RegExp("(\\\\item\\s*\\\\textbf\\{"+label.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')+"\\}\\{:\\s*)([^}]+)(\\})","m"); const m=tex.match(rx); return m?{items:m[2].trim()}:null; }
+function replaceSkillLine(tex,label,csv){ const rx=new RegExp("(\\\\item\\s*\\\\textbf\\{"+label.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')+"\\}\\{:\\s*)([^}]+)(\\})","m"); return tex.replace(rx,(f,a,_b,c)=>a+csv+c); }
+
+// ===== Apply ops from model =====
+function applyOps(tex, ops, sectionsCache) {
+  let out = tex;
+  const secByName = (name) => (sectionsCache || findSubsections(out)).find(s => s.name.toLowerCase() === String(name||"").toLowerCase());
+  for (const op of (ops || [])) {
+    try {
+      if (op.op === "replace_bullets") {
+        const sec = secByName(op.section); if (!sec) continue;
+        if (!Array.isArray(op.bullets) || op.bullets.length !== sec.bullets.length) continue;
+        out = replaceSectionBullets(out, sec.name, op.bullets);
+      } else if (op.op === "add_bullet") {
+        const sec = secByName(op.section); if (!sec || !op.bullet) continue;
+        const rx = new RegExp("(\\\\resumeSubheading\\s*\\{\\s*" + sec.name.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&') + "\\s*\\}[^]*?\\\\begin\\{itemize\\})([\\s\\S]*?)(\\\\end\\{itemize\\})","m");
+        out = out.replace(rx,(full,pre,body,post)=> pre + body + "  \\item " + op.bullet + "\n" + post);
+      } else if (op.op === "replace_skill_csv") {
+        if (!op.label || typeof op.csv !== "string") continue;
+        const existing = extractSkillLine(out, op.label); if (!existing) continue;
+        const beforeCount = existing.items.split(",").length, afterCount = op.csv.split(",").length;
+        if (beforeCount !== afterCount) continue;
+        out = replaceSkillLine(out, op.label, op.csv);
+      } else if (op.op === "replace_text") {
+        if (op.find && typeof op.replace === "string") {
+          const rgx = new RegExp(op.find, "m"); out = out.replace(rgx, op.replace);
+        }
+      }
+    } catch (e) { console.warn("Failed to apply op", op, e); }
+  } return out;
+}
+
+// ===== Gemini plan (supports Rewrite Prompt) =====
+async function geminiPlan(apikey, jd, userPrompt, sections, skills, missing, allowedAdditions) {
+  const defaultPolicy = `
+You are an ATS-safe resume editor. Make light edits only (no hidden text). Preserve numbers/impact.
+Keep each rewritten bullet within ±12% length of the original and follow that strictly do not reduce a lot of content. Edit at most 3-4 bullets total and odo not add extra bullet points
+Keep skill-line item counts unchanged. Only add a term if it is in the JD but not in the resume.`;
+  const instruction = (userPrompt && userPrompt.trim().length)
+    ? `USER REWRITE PROMPT (take precedence; stay conservative):\n${userPrompt.trim()}`
+    : `No custom prompt specified; choose the most impactful minimal edits.`;
+  const schema = `
+Return STRICT JSON ONLY:
+{"ops":[
+  {"op":"replace_bullets","section":"Section Name","bullets":["text","text",...]},
+  {"op":"add_bullet","section":"Section Name","bullet":"text"},
+  {"op":"replace_skill_csv","label":"Frameworks and Libraries","csv":"A, B, C"},
+  {"op":"replace_text","find":"regex","replace":"string"}
+]}`;
+  const payload = {
+    contents: [{ role:"user", parts:[{ text:
+`${defaultPolicy}
+
+${instruction}
+
+JD (trimmed):
+${jd.slice(0, 6000)}
+
+Detected missing/underrepresented stems: ${missing.join(", ")}
+
+Allowed additions (user-verified skills): ${allowedAdditions.join(", ")}
+
+SECTIONS (name + bullet count):
+${sections.map(s => `- ${s.name}: ${s.bullets.length} bullets`).join("\n")}
+
+SKILL LINES (label: csv):
+${Object.entries(skills).map(([k,v])=>`${k}: ${v}`).join("\n")}
+
+${schema}`}]}],
+    generationConfig: { temperature: 0.4, topK: 40, topP: 0.9, maxOutputTokens: 900 }
+  };
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key="+encodeURIComponent(apikey),{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
+  });
+  console.log(JSON.stringify(payload));
+  if (!res.ok) throw new Error("Gemini API error: " + res.status);
+  const data = await res.json();
+  const txt = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!txt) throw new Error("No text returned from Gemini.");
+  let obj = null; try { obj = JSON.parse(txt); } catch { const m = txt.match(/\{[\s\S]*\}$/m); if (m) { try { obj = JSON.parse(m[0]); } catch {} } }
+  if (!obj || !Array.isArray(obj.ops)) throw new Error("Unexpected Gemini output.");
+  return obj.ops;
+}
+
+
+// ===== Compile LaTeX → PDF (multi-file, PDF-only) via texlive.net =====
+async function compileToPdf(texSource) {
+  // Read config & assets
+  const [{ engine = "pdflatex" }, { assets = [] }] = await Promise.all([
+    new Promise(res => chrome.storage.sync.get(["engine"], v => res(v || {}))),
+    new Promise(res => chrome.storage.local.get(["assets"], v => res(v || {}))),
+  ]);
+
+  const fd = new FormData();
+  // main file MUST be named document.tex for latexcgi
+  fd.append("filename[]", "document.tex");
+  fd.append("filecontents[]", new Blob([texSource], { type: "text/plain" }));
+
+  for (const a of (assets || [])) {
+    try {
+      // Accept both shapes: { dataBase64 } (new) OR { data } (old)
+      const b64 = a?.dataBase64 || a?.data;
+      if (!b64) {
+        console.warn("Skip asset (no base64):", a?.name);
+        continue;
+      }
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const blob  = new Blob([bytes], { type: a.mime || a.type || "application/octet-stream" });
+
+    // IMPORTANT: TeX is case-sensitive; keep exact filename (e.g., "fed-res.cls")
+    fd.append("filename[]", a.name);
+    fd.append("filecontents[]", blob);
+  } catch (e) {
+    console.warn("Skip asset (decode failed):", a?.name, e);
+  }
+}
+
+
+  // engine + return type
+  fd.append("engine", engine || "pdflatex"); // try "xelatex" if your class needs fontspec
+  fd.append("return", "pdf");                // raw PDF bytes, not an HTML viewer
+
+  let res = await fetch("https://texlive.net/cgi-bin/latexcgi", {
+    method: "POST",
+    body:   fd,
+           // we’ll follow ourselves
+  });
+
+  // latexcgi returns 301 with Location: /latexcgi/<file>.pdf
+  if (res.status === 301 || res.status === 302) {
+    const loc = res.headers.get("location");
+    if (!loc) throw new Error("Redirect without Location header");
+    const pdfURL = new URL(loc, "https://texlive.net").href;
+    res = await fetch(pdfURL);                 // second request: the real PDF
+  }
+
+  const buf = await res.arrayBuffer();
+
+  if (buf.byteLength < 4) {
+    throw new Error(`PDF download came back empty (${buf.byteLength} B).`);
+  }
+  const header = new TextDecoder("ascii")
+                   .decode(new Uint8Array(buf, 0, 4));
+  if (header !== "%PDF") {
+    const msg = new TextDecoder().decode(new Uint8Array(buf));
+  console.error("FULL LaTeX log ↓↓↓\n" + msg);      // <─ NEW
+  throw new Error("LaTeX compile failed – see console for full log");
+  }
+  return buf;
+}
+
+
+
+
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  (async () => {
+    if (msg?.type === "PROCESS_JD_PIPELINE") {
+      const { jd, prompt } = msg.payload || {};
+
+      // 🔁 use local for big LaTeX; sync for small keys
+      const getSync  = (keys) => new Promise(res => chrome.storage.sync.get(keys, v => res(v || {})));
+      const getLocal = (keys) => new Promise(res => chrome.storage.local.get(keys, v => res(v || {})));
+
+      // read both stores
+      const [{ keywords = [], apikey = "" }, { latex: localLatex = "" }] = await Promise.all([
+        getSync(["keywords", "apikey"]),
+        getLocal(["latex"])
+      ]);
+
+      // one-time migration: if LaTeX was previously stored in sync, move it to local
+      let latex = localLatex;
+      if (!latex) {
+        const { latex: syncLatex = "" } = await getSync(["latex"]);
+        if (syncLatex) {
+          await chrome.storage.local.set({ latex: syncLatex });
+          await chrome.storage.sync.remove("latex");
+          latex = syncLatex;
+        }
+      }
+
+      if (!latex || !apikey) throw new Error("Missing LaTeX or API key in Options.");
+
+      const sections = findSubsections(latex);
+      if (!sections.length) throw new Error("Couldn't find any \\resumeSubheading blocks.");
+
+      const labels = [
+        "Programming Languages",
+        "Frameworks and Libraries",
+        "Databases",
+        "Tools and Technologies",
+        "Software Development Practices",
+        "Cloud Platforms and Deployment"
+      ];
+      const skills = {};
+      for (const lab of labels) {
+        const line = extractSkillLine(latex, lab);
+        if (line) skills[lab] = line.items;
+      }
+
+      const missing = diffMissing(jd, keywords || []);
+      const allowedAdditions = (keywords || []).map(k => k.trim()).filter(Boolean);
+
+      const ops = await geminiPlan(apikey, jd, prompt, sections, skills, missing, allowedAdditions);
+      const updated = applyOps(latex, ops, sections);
+
+      const out = await compileToPdf(updated);      // ArrayBuffer
+
+      
+const b64 = arrayBufferToBase64(out);   // <- out is the ArrayBuffer
+sendResponse({ pdfB64: b64, tex: updated });
+
+    }
+  })().catch(err => { console.error(err); try { sendResponse(null); } catch (_) {} });
+  return true;
+});
+
+// background.js  (replace the 3-line “btoa( String.fromCharCode … )” block)
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 32768;              // 32 kB – well below the arg-limit
+  let binary = "";
+
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(
+               null,
+               bytes.subarray(i, i + CHUNK)
+             );
+  }
+  return btoa(binary);
+}
+

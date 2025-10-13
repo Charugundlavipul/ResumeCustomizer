@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ATS Enhancer – Options</title>
+  <style>
+    :root { --bg:#0b1b2b; --card:#13273b; --accent:#2eaadc; --muted:#a7c2d9; --text:#eaf6ff; --radius:14px; }
+    body { font-family: Inter, system-ui, Segoe UI, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+    .wrap { padding: 16px; max-width: 980px; margin: auto; }
+    h2, h3 { margin: 0 0 10px; }
+    p.muted { color: var(--muted); }
+    .card { background: var(--card); border-radius: var(--radius); padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.25); margin-bottom: 16px; }
+    label { font-size: 12px; color: var(--muted); display:block; margin:6px 0 6px; }
+    textarea, input[type="password"] { width:100%; min-height: 140px; border: 1px solid rgba(255,255,255,.08); background:#0f2235; color: var(--text); border-radius: 10px; padding: 10px; outline:none; }
+    input[type="password"] { min-height:initial; height: 40px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    button { border:none; background:var(--accent); color:#05202b; padding:10px 14px; border-radius:10px; font-weight:600; cursor:pointer;}
+    button.ghost { background:transparent; border:1px solid rgba(255,255,255,.15); color:var(--text); }
+    .state { font-size: 12px; color: var(--muted); min-height:18px; }
+    input[type="file"] { color: var(--muted); }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>ATS Resume Enhancer — Options</h2>
+
+    <div class="card">
+      <h3>1) LaTeX Resume (Overleaf-compatible)</h3>
+      <p class="muted">Paste your entire <code>.tex</code> source here. The tool will edit bullets & skills — no hidden text.</p>
+      <label for="latex">LaTeX Source</label>
+      <textarea id="latex"></textarea>
+      <div class="row" style="margin-top:8px;">
+        <input type="file" id="texfile" accept=".tex" />
+        <button id="loadFile" class="ghost">Import .tex</button>
+        <button id="save">Save</button>
+        <button id="export" class="ghost">Export Settings</button>
+        <input type="file" id="importFile" accept="application/json" />
+        <button id="importBtn" class="ghost">Import Settings</button>
+        <span id="saveState" class="state"></span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>2) Resume Keywords (you actually have)</h3>
+        <p class="muted">Comma-separated. These constrain what the model can add so it won’t invent skills (e.g., C++).</p>
+        <label for="keywords">Keywords</label>
+        <textarea id="keywords" placeholder="Java, Spring Boot, REST, AWS, React, MongoDB"></textarea>
+      </div>
+
+      <div class="card">
+        <h3>3) Gemini API Key</h3>
+        <p class="muted"><a href="https://aistudio.google.com/" target="_blank" style="color:#8ad8ff">Get a key</a>. Stored with <code>chrome.storage.sync</code>.</p>
+        <label for="apikey">API Key</label>
+        <input id="apikey" type="password" placeholder="AIza…" />
+      </div>
+    </div>
+
+
+      <div class="card">
+  <h3>4) Supporting LaTeX files (optional)</h3>
+  <p class="muted">
+    Add custom class/style/assets required to compile locally (e.g., <code>fed-res.cls</code>, <code>.sty</code>, images).
+    These are stored locally and zipped with your main <code>.tex</code> for compilation.
+  </p>
+
+  <div class="row" style="margin:8px 0;">
+    <input id="assetPicker" type="file" multiple
+           accept=".cls,.sty,.tex,.bib,.png,.jpg,.jpeg,.pdf,.eps,.ttf,.otf,.png,.svg,.bst,.cfg,.def,.fd,.map,.enc,.tfm,.vf,.fd,.sty,.cls,*/*" />
+    <button id="addAssets" class="ghost" type="button">Add Files</button>
+    <button id="clearAssets" class="ghost" type="button">Clear All</button>
+  </div>
+
+  <ul id="assetList" style="list-style:none; padding-left:0; margin:8px 0 0;"></ul>
+  <div id="assetState" class="state"></div>
+</div>
+
+  </div>
+
+
+
+  <script src="options.js" defer></script>
+</body>
+</html>

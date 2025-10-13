@@ -1,0 +1,87 @@
+// popup.js — PDF-only pipeline (fixed)
+
+(() => {
+  /* ---------- small helpers ---------- */
+  function ready(fn) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", fn, { once: true });
+    } else fn();
+  }
+
+  // Accept ArrayBuffer | TypedArray | {type:"Buffer",data:Array}
+  function coerceToArrayBuffer(maybe) {
+    if (!maybe) return null;
+
+    if (maybe instanceof ArrayBuffer) return maybe;
+    if (ArrayBuffer.isView(maybe))     return maybe.buffer;
+
+    if (maybe.type === "Buffer" && Array.isArray(maybe.data)) {
+      return Uint8Array.from(maybe.data).buffer;
+    }
+    return null;                       // unknown shape
+  }
+
+  /* ---------- popup main ---------- */
+  ready(() => {
+    const $ = id => document.getElementById(id);
+
+    const openSettingsBtn = $("openSettings");
+    const generateBtn     = $("generate");
+    const jdEl            = $("jd");
+    const promptEl        = $("prompt");
+    const statusEl        = $("status");
+    const pdfLink         = $("downloadPdf");
+
+    // Hide .tex / .zip anchors (PDF-only build)
+    const hide = a => a && (a.style.display = "none", a.removeAttribute("href"));
+    hide(document.getElementById("downloadTex"));
+    hide(document.getElementById("downloadZip"));
+
+    openSettingsBtn?.addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+    generateBtn?.addEventListener("click", async () => {
+      if (!jdEl || !statusEl) return;
+
+      const jd        = (jdEl.value     || "").trim();
+      const userPrompt= (promptEl?.value|| "").trim();
+
+      if (pdfLink?.href?.startsWith("blob:")) URL.revokeObjectURL(pdfLink.href);
+      hide(pdfLink);
+
+      if (!jd) { statusEl.textContent = "Please paste a Job Description."; return; }
+
+      const prevText = generateBtn.textContent;
+      generateBtn.disabled   = true;
+      generateBtn.textContent= "Working…";
+      statusEl.textContent   = "Planning edits → rewriting → compiling…";
+
+      try {
+        const resp = await chrome.runtime.sendMessage({
+          type:    "PROCESS_JD_PIPELINE",
+          payload: { jd, prompt: userPrompt }
+        });
+
+        /* -------- sanity-check response -------- */
+        if (!resp || !resp.pdfB64) {
+          statusEl.textContent = "Compile failed – see background console";
+          return;
+        }
+        const binary = atob(resp.pdfB64);
+        const bytes  = Uint8Array.from({length: binary.length},
+                                       (_,i) => binary.charCodeAt(i));
+        const pdfBlob = new Blob([bytes], { type: "application/pdf" });
+        const pdfUrl  = URL.createObjectURL(pdfBlob);
+
+        pdfLink.href  = pdfUrl;
+        pdfLink.style.display = "inline-block";
+        statusEl.textContent  = "Done! PDF is ready.";
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = e?.message || "Unexpected error. See console.";
+      } finally {
+        generateBtn.disabled   = false;
+        generateBtn.textContent= prevText;
+      }
+    });
+  });
+})();
