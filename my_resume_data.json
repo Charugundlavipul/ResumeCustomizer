@@ -1,0 +1,56 @@
+{
+  "apikey": "AIzaSyAIC0wWyVhQgk0wgLjenbczPW4yA6vFHgE",
+  "categories": [
+    {
+      "id": "cat-1728798070123",
+      "name": "SDE Full Stack",
+      "latex": "\\documentclass[calibri,10pt]{fed-res}\n\\usepackage{xcolor} % if not already loaded\n\n\\usepackage[margin=0.25in]{geometry} % Adjusts the margins\n\\usepackage{fontawesome5}\n\\usepackage{hyperref}\n\n% Preamble\n\\usepackage{graphicx} % for \\scalebox\n\n% ATS-friendly, human-invisible microtext\n\\newcommand{\\atsmicro}[1]{%\n  {\\color{white}\\scalebox{0.01}{\\mbox{#1}}}%\n}\n\n\n\\begin{document}\n\n%-------------------------------------------------------------------------------\n%\\tHEADING INFORMATION\n%-------------------------------------------------------------------------------\n\n\\begin{center}\n    \\textbf{\\LARGE  \\scshape Vipul Charugundla} \\\\ \\vspace{5pt}\n    Buffalo, New York $\\;|\\;$ \n    (716) 710-7704 $\\;|\\;$ charugundlavipul@gmail.com $\\;|\\;$\n    \\href{https://github.com/Charugundlavipul}{\\faGithub \\ GitHub}$\\;|\\;$\n    \\href{https://www.linkedin.com/in/charugundla-vipul-3911561aa/}{\\faLinkedin \\ LinkedIn}$\\;|\\;$\\href{https://vipulcharugundla.netlify.app/}{ \\faBriefcase \\ Portfolio}\n\\end{center} \n\\vspace{-10pt}\n% \\section{Professional Summary}\n% \\resumeSubHeadingListStart\n% Full stack developer with \\textbf{2 years} of expertise in \\textbf{Java} and \\textbf{Spring Boot}, proficient in front-end and back-end technologies. Experienced in designing user interfaces and managing data using SQL and NoSQL databases. Skilled in developing cross-platform applications with \\textbf{Flutter} and \\textbf{React}, focusing on optimizing performance and delivering scalable solutions.\n\n\\vspace{-4pt}\n\\section{Technical Skills}\n\\vspace{2pt}\n\\resumeSubHeadingListStart\n\\item \\textbf{Programming Languages}{: Java, Dart, Python, JavaScript, C, PHP, TypeScript, C++}\\vspace{-5pt}\n\\item \\textbf{Frameworks and Libraries}{: Spring Boot, Flutter, React.js, Node.js, Express.js, Redux, Tailwind CSS, JPA}\\vspace{-5pt}\n\\item \\textbf{Databases}{: PostgreSQL, MySQL, TiDB, Firebase, MongoDB, Redis, GraphQL, DynamoDB, Oracle}\\vspace{-5pt}\n\\item \\textbf{Tools and Technologies}{: HTML, CSS, Docker, Kubernetes, JUnit, Kafka, Gradle, RabbitMQ, Git, Postman, Maven, Grafana}\\vspace{-5pt}\n\\item \\textbf{Cloud Platforms and Deployment}{:  GCP, AWS, Terraform, Heroku, Netlify, Azure, Jenkins, ECS, Vercel, UNIX, Linux}\\vspace{-5pt}\n\\item \\textbf{Software Development Practices}{: REST API, CI/CD, Agile Methodologies, SDLC, System Design, Jira, SOA}\\vspace{-5pt}\n\\item \\textbf{Certifications}{: \\textbf{AWS Certified} Solution Architect, \\textbf{AWS Certified} Developer,\\textbf{ Microsoft} Essentials in Generative AI}\\vspace{-5pt}\n\\resumeSubHeadingListEnd\n\n\n\\vspace{-10pt}\n\n\\section{Work Experience}\n\n\\resumeSubHeadingListStart\n\\vspace{3pt}\n\n\\resumeSubheading\n  {Senior Software Development Engineer}{Oct 2024 -- Present}\n  {PilProgram}{Amherst, NY}\n\\begin{itemize}[leftmargin=10pt,itemsep=1pt,parsep=0pt,topsep=3pt,partopsep=0pt]\n\\item Led a cross-functional team of 6 (4 engineers, 2 designers) to architect and develop the Parliamade mobile application using the MERN stack, responsive UI/UX, and performance optimizations for a production-ready platform.\n\\item Architected development of the core AI recommendation engine using Node.js and Google Recommendations AI, improving recommendation efficiency by 35\\% and supporting 800+ daily active users through scalable machine learning algorithms.\n\n\\item Rebuilt the front-end of Parliamade with React, Next.js, and Vite, improving load performance by 35\\% through code-splitting, lazy loading, and optimized state management, while ensuring a smoother and more responsive UX.\n\n\n\\end{itemize}\n\n\\vspace{-4pt}\n\n\\resumeSubheading\n  {Software Development Engineer-1}{Jan 2023 -- Aug 2024}\n  {Brane Group}{Hyderabad}\n\\begin{itemize}[leftmargin=10pt,itemsep=1pt,parsep=0pt,topsep=3pt,partopsep=0pt]\n\n\\item Designed advanced caching mechanisms with Redis, optimized multi-process data serialization using Kryo, and applied concurrency controls to reduce database latency by 40\\% and enhance transaction throughput by 50\\%.\n\n\\item Engineered Adapter integrations for Firebase and Google Classroom using Java, Spring Boot, REST APIs, and Hibernate, implementing multi-threaded microservices on Unix/Linux environments, reducing onboarding time by 30\\%.\n\\item Pioneered a Flutter desktop app for enterprise data management on Windows and macOS operating systems, using Bloc architecture and optimized SQL queries, boosting data retrieval speed by 50\\% and securing a major client.\n\\item Redesigned critical backend APIs in Spring Boot, eliminating redundant inter-service calls and reducing average latency from 400 ms to 30 ms, which improved retrieval speed by 92\\% and significantly boosted overall system performance.\n\\item Migrated 7 microservices from Java 17 to 21, Implemented regression testing suites, conducted UAT, Integration Testing and automated CI/CD pipelines with Jenkins, Docker, and Kubernetes for scalable, distributed systems.\n\\end{itemize}\n\n\\vspace{-4pt}\n\\resumeSubheading\n  {SDE Intern}{Jun 2022 -- Aug 2022}\n  {Xanadu}{Mumbai}\n\\begin{itemize}[leftmargin=10pt,itemsep=2pt,parsep=0pt,topsep=5pt,partopsep=0pt]\n \\item Designed and implemented a full stack lead management application with features like employee tracking and customer journey tracking, increasing lead conversion rates by 40\\% and enhancing employee engagement by 70\\%.\n\n\\item Enhanced SEO using Next.js for server-side rendering, integrated AWS S3 with CloudFront CDN for image delivery, and optimized performance through lazy loading and Redis caching reducing load times by 60\\%.\n\\end{itemize}\n\n\n\\resumeSubHeadingListEnd\n\n\\vspace{-15pt}\n\\section{Projects}\n    \\resumeSubHeadingListStart\n      \\vspace{2pt}\n%PROJECTS WILL BE DYNAMICALLY INJECTED HERE\n    \\resumeSubHeadingListEnd\n    \\vspace{-15pt}\n \n\\section{Education}\n\\resumeSubHeadingListStart\n\\vspace{2pt}\n \n    \\resumeSubheading\n      {University at Buffalo (SUNY Buffalo)}{Jul 2024 - Present}\n      {Master of Science, Computer and Information Sciences}{Buffalo, NY}\n      \\vspace{0.5 pt}\n        \\item \\textbf{Course Work}:  Algorithms,  Operating Systems, DMQL, Deep Learning, Machine Learning, Computer Vision\n\n    \\resumeSubheading\n      {Shiv Nadar University}{Jul 2019 - May 2023}\n      {Bachelor of Technology, Computer Science and Engineering}{Delhi NCR, India}\n      \\vspace{0.5 pt}\n      \\item \\textbf{Course Work}:  Data Structures, DBMS, Computer Architecture, Cloud Computing, Artificial Intelligence (A.I)\n      \n   % \\atsmicro{Intelligence}\n    \n\n\n  \\resumeSubHeadingListEnd\n\n\n\n\\end{document}\n",
+      "keywords": [
+        "Java", "Dart", "Python", "JavaScript", "C", "PHP", "TypeScript", "C++",
+        "Spring Boot", "Flutter", "React.js", "Node.js", "Express.js", "Redux", "Tailwind CSS", "JPA",
+        "PostgreSQL", "MySQL", "TiDB", "Firebase", "MongoDB", "Redis", "GraphQL", "DynamoDB", "Oracle",
+        "HTML", "CSS", "Docker", "Kubernetes", "JUnit", "Kafka", "Gradle", "RabbitMQ", "Git", "Postman", "Maven", "Grafana",
+        "GCP", "AWS", "Terraform", "Heroku", "Netlify", "Azure", "Jenkins", "ECS", "Vercel", "UNIX", "Linux",
+        "REST API", "CI/CD", "Agile Methodologies", "SDLC", "System Design", "Jira", "SOA"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-1728798070124",
+      "name": "SmartGoal AI",
+      "dates": "May 2025 -- Present",
+      "link": "https://github.com/Charugundlavipul/SmartGoal-AI",
+      "bullets": [
+        "Built an AI-powered therapy analysis platform in collaboration with SUNY Buffalo and USC, enabling speech-language pathologists to generate visit notes, design activities, and track patient progress using therapist inputs for 300+ children."
+      ],
+      "categoryIds": [
+        "cat-1728798070123"
+      ]
+    },
+    {
+      "id": "proj-1728798070125",
+      "name": "JobGenie",
+      "dates": "Mar 2025 -- May 2025",
+      "link": "https://github.com/Charugundlavipul/Job-Genie",
+      "bullets": [
+        "Architected Job Genie, an AI-driven sourcing platform that interprets complex job descriptions, surfaces the top five candidate matches by skill and experience, and accelerates recruiter workflows by 80% for data-driven hiring."
+      ],
+      "categoryIds": [
+        "cat-1728798070123"
+      ]
+    },
+    {
+      "id": "proj-1728798070126",
+      "name": "CheckBot-Alpha",
+      "dates": "Nov 2022 -- Jan 2023",
+      "link": "https://github.com/Charugundlavipul/CheckBot-Alpha/",
+      "bullets": [
+        "Developed an advanced Python checkers bot utilizing pygame library, integrating Random and 3-level Mini-max strategies; It demonstrated strategic depth by maintaining an impressive 85% win rate over 100 simulated matches."
+      ],
+      "categoryIds": [
+        "cat-1728798070123"
+      ]
+    }
+  ]
+}

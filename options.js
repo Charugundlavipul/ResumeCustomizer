@@ -1,209 +1,258 @@
-// options.js — stores LaTeX locally; small keys (keywords, apikey, engine) in sync
 document.addEventListener("DOMContentLoaded", () => {
-  const $ = (id) => document.getElementById(id);
+    const $ = id => document.getElementById(id);
 
-  // Promise helpers
-  const syncGet    = (keys) => new Promise(res => chrome.storage.sync.get(keys, v => res(v || {})));
-  const syncSet    = (obj)  => new Promise(res => chrome.storage.sync.set(obj, () => res()));
-  const syncRemove = (key)  => new Promise(res => chrome.storage.sync.remove(key, () => res()));
-  const localGet   = (keys) => new Promise(res => chrome.storage.local.get(keys, v => res(v || {})));
-  const localSet   = (obj)  => new Promise(res => chrome.storage.local.set(obj, () => res()));
+    // --- State & Storage ---
+    let DB = { apikey: "", categories: [], projects: [] };
 
-  // ---------- Load ----------
-// ---------- Load ----------
-async function load() {
-  try {
-    const [{ latex: syncLatex = "" }, { latex: localLatex = "" }] = await Promise.all([
-      syncGet(["latex"]),
-      localGet(["latex"])
-    ]);
-    let latex = localLatex || syncLatex || "";
-    if (!localLatex && syncLatex) {
-      await localSet({ latex: syncLatex });
-      await syncRemove("latex");
-    }
+    const storage = {
+        get: () => new Promise(res => chrome.storage.local.get("resumeData", v => res(v.resumeData || DB))),
+        set: (data) => new Promise(res => chrome.storage.local.set({ resumeData: data }, res))
+    };
 
-    const { keywords = [], apikey = "", engine = "pdflatex" } =
-      await syncGet(["keywords", "apikey", "engine"]);
-
-    // ✅ write with guards (no optional chaining on LHS)
-    const latexEl = $("latex");
-    if (latexEl) latexEl.value = latex;
-
-    const keywordsEl = $("keywords");
-    if (keywordsEl) keywordsEl.value = Array.isArray(keywords) ? keywords.join(", ") : (keywords || "");
-
-    const apikeyEl = $("apikey");
-    if (apikeyEl) apikeyEl.value = apikey || "";
-
-    const engineEl = $("engine");
-    if (engineEl) engineEl.value = engine || "pdflatex";
-
-    renderAssets();
-  } catch (e) {
-    console.error("Load error:", e);
-  }
-}
-
-
-  // ---------- Import/Export ----------
-  $("loadFile")?.addEventListener("click", async () => {
-    const fileInput = $("texfile");
-    if (!fileInput?.files?.length) return alert("Choose a .tex file first.");
-    const text = await fileInput.files[0].text();
-    $("latex").value = text;
-  });
-
-  $("save")?.addEventListener("click", async () => {
-    const latex    = $("latex")?.value ?? "";
-    const keywords = ($("keywords")?.value || "").split(",").map(s => s.trim()).filter(Boolean);
-    const apikey   = ($("apikey")?.value || "").trim();
-    const engine   = $("engine") ? $("engine").value : "pdflatex";
-
-    await Promise.all([
-      localSet({ latex }),
-      syncSet({ keywords, apikey, engine })
-    ]);
-
-    if ($("saveState")) {
-      $("saveState").textContent = "Saved ✓ (LaTeX stored locally)";
-      setTimeout(() => $("saveState").textContent = "", 1800);
-    }
-  });
-
-  $("export")?.addEventListener("click", async () => {
-    const [syncData, localData] = await Promise.all([
-      syncGet(["keywords", "apikey", "engine"]),
-      localGet(["latex", "assets"])
-    ]);
-    const data = { ...localData, ...syncData };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url  = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "ats-enhancer-settings.json";
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  });
-
-  $("importBtn")?.addEventListener("click", async () => {
-    const input = $("importFile");
-    if (!input?.files?.length) return alert("Choose a JSON file exported from this tool.");
-    try {
-      const obj = JSON.parse(await input.files[0].text());
-      await Promise.all([
-        localSet({ latex: obj.latex || "", assets: Array.isArray(obj.assets) ? obj.assets : undefined }),
-        syncSet({
-          keywords: Array.isArray(obj.keywords) ? obj.keywords :
-                    (obj.keywords ? String(obj.keywords).split(",").map(s=>s.trim()).filter(Boolean) : []),
-          apikey: obj.apikey || "",
-          engine: obj.engine || "pdflatex"
-        })
-      ]);
-      await load();
-      if ($("saveState")) {
-        $("saveState").textContent = "Imported ✓";
-        setTimeout(() => $("saveState").textContent = "", 1800);
-      }
-    } catch (e) {
-      console.error(e); alert("Invalid JSON");
-    }
-  });
-
-  // ---------- Supporting files (assets) ----------
-  function bytesToSize(n) {
-    if (!n) return "0 B";
-    const u = ["B","KB","MB","GB"]; const i = Math.floor(Math.log(n)/Math.log(1024));
-    return (n/Math.pow(1024,i)).toFixed(1) + " " + u[i];
-  }
-
-  async function renderAssets() {
-    const { assets = [] } = await localGet(["assets"]);
-    const list = document.getElementById("assetList");
-    const state = document.getElementById("assetState");
-    if (!list || !state) return;
-
-    list.innerHTML = "";
-    let total = 0;
-    assets.forEach((a, idx) => {
-      total += (a.size || Math.ceil((a.dataBase64?.length || a.data?.length || 0) * 0.75));
-      const li = document.createElement("li");
-      li.style.margin = "6px 0";
-      li.style.display = "flex";
-      li.style.justifyContent = "space-between";
-      li.style.alignItems = "center";
-      li.innerHTML = `
-        <span style="font-size:13px;color:#cfe6f8">${a.name}</span>
-        <span style="font-size:12px;color:#8fb8d7">${bytesToSize(total)}</span>
-        <button data-idx="${idx}" class="ghost" style="margin-left:8px;">Remove</button>
-      `;
-      list.appendChild(li);
-    });
-    state.textContent = assets.length
-      ? `Stored ${assets.length} files (${bytesToSize(total)}).`
-      : "No supporting files added yet.";
-
-    // bind remove
-    list.querySelectorAll("button[data-idx]")?.forEach(btn => {
-      btn.addEventListener("click", async (e) => {
-        const idx = Number(e.currentTarget.getAttribute("data-idx"));
-        const { assets = [] } = await localGet(["assets"]);
-        assets.splice(idx, 1);
-        await localSet({ assets });
-        renderAssets();
-      });
-    });
-  }
-
-  async function addSelectedAssets() {
-    const input = document.getElementById("assetPicker");
-    if (!input?.files?.length) return alert("Choose one or more files first.");
-    const files = Array.from(input.files);
-
-    // read as base64; store both .data and .dataBase64 for compatibility
-    const reads = files.map(f => new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => {
-        const dataUrl = String(r.result);
-        const base64 = dataUrl.substring(dataUrl.indexOf(",")+1);
-        resolve({
-          name: f.name,
-          type: f.type || "application/octet-stream",
-          mime: f.type || "application/octet-stream",
-          size: f.size,
-          data: base64,
-          dataBase64: base64
+    // --- UI Rendering ---
+    const renderCategories = () => {
+        const listEl = $("categoryList");
+        listEl.innerHTML = "";
+        if (!DB.categories.length) {
+            listEl.innerHTML = `<p class="muted" style="margin-bottom:10px;">No categories created yet.</p>`;
+            return;
+        }
+        DB.categories.forEach(cat => {
+            const item = document.createElement("div");
+            item.className = "list-item";
+            item.innerHTML = `
+                <span>${cat.name}</span>
+                <div>
+                    <button data-id="${cat.id}" class="edit-cat ghost">Edit</button>
+                    <button data-id="${cat.id}" class="delete-cat danger">Delete</button>
+                </div>
+            `;
+            listEl.appendChild(item);
         });
-      };
-      r.onerror = reject;
-      r.readAsDataURL(f);
-    }));
+    };
 
-    const picked = await Promise.all(reads);
-    const store = await localGet(["assets"]);
-    const cur = Array.isArray(store.assets) ? store.assets : [];
-    const nameMap = new Map(cur.map(a => [a.name, a]));
-    picked.forEach(p => nameMap.set(p.name, p));
-    const merged = Array.from(nameMap.values());
+    const renderProjects = () => {
+        const listEl = $("projectList");
+        listEl.innerHTML = "";
+        if (!DB.projects.length) {
+            listEl.innerHTML = `<p class="muted" style="margin-bottom:10px;">No projects created yet.</p>`;
+            return;
+        }
+        DB.projects.forEach(proj => {
+            const item = document.createElement("div");
+            item.className = "list-item";
+            item.innerHTML = `
+                <span>${proj.name}</span>
+                <div>
+                    <button data-id="${proj.id}" class="edit-proj ghost">Edit</button>
+                    <button data-id="${proj.id}" class="delete-proj danger">Delete</button>
+                </div>
+            `;
+            listEl.appendChild(item);
+        });
+    };
 
-    // soft cap ~15MB to avoid local quota surprises
-    const approxBytes = merged.reduce((s,a)=> s + (a.size || Math.ceil((a.dataBase64?.length || a.data?.length || 0)*0.75)), 0);
-    if (approxBytes > 15*1024*1024) {
-      alert("Total supporting files exceed ~15 MB. Remove some large assets.");
-      return;
-    }
+    const renderAll = () => {
+        renderCategories();
+        renderProjects();
+    };
 
-    await localSet({ assets: merged });
-    input.value = "";
-    renderAssets();
-  }
+    // --- Modals ---
+    const categoryModal = {
+        el: $("categoryModal"),
+        show: (cat = null) => {
+            $("categoryModalTitle").textContent = cat ? "Edit Category" : "Create Category";
+            $("categoryId").value = cat?.id || "";
+            $("categoryName").value = cat?.name || "";
+            $("categoryKeywords").value = Array.isArray(cat?.keywords) ? cat.keywords.join(", ") : (cat?.keywords || "");
+            $("categoryLatex").value = cat?.latex || "";
 
-  async function clearAllAssets() {
-    if (!confirm("Remove ALL supporting files?")) return;
-    await localSet({ assets: [] });
-    renderAssets();
-  }
+            // START: MODIFIED section for .cls file handling
+            const clsContent = cat?.clsFileContent || "";
+            $("categoryClsContent").value = clsContent;
+            if (clsContent) {
+                $("clsFileStatus").textContent = "fed-res.cls is already saved.";
+                $("uploadClsBtn").textContent = "Replace .cls File";
+            } else {
+                $("clsFileStatus").textContent = "No .cls file uploaded.";
+                $("uploadClsBtn").textContent = "Upload .cls File";
+            }
+            $("categoryClsFile").value = ""; // Clear file input
+            // END: MODIFIED section
 
-  document.getElementById("addAssets")?.addEventListener("click", addSelectedAssets);
-  document.getElementById("clearAssets")?.addEventListener("click", clearAllAssets);
+            categoryModal.el.style.display = "block";
+        },
+        hide: () => { categoryModal.el.style.display = "none"; }
+    };
 
-  // ---------- Go ----------
-  load();
+    const projectModal = {
+        el: $("projectModal"),
+        show: (proj = null) => {
+            $("projectModalTitle").textContent = proj ? "Edit Project" : "Create Project";
+            $("projectId").value = proj?.id || "";
+            $("projectName").value = proj?.name || "";
+            $("projectDates").value = proj?.dates || "";
+            $("projectLink").value = proj?.link || "";
+            $("projectBullets").value = proj?.bullets?.join("\n") || "";
+
+            const assocEl = $("projectCategoryAssociation");
+            assocEl.innerHTML = "";
+            DB.categories.forEach(cat => {
+                const isChecked = proj?.categoryIds?.includes(cat.id);
+                assocEl.innerHTML += `
+                    <label style="display:inline-block; margin-right:15px;">
+                        <input type="checkbox" value="${cat.id}" ${isChecked ? "checked" : ""}>
+                        ${cat.name}
+                    </label>
+                `;
+            });
+            projectModal.el.style.display = "block";
+        },
+        hide: () => { projectModal.el.style.display = "none"; }
+    };
+
+    // --- Event Handlers ---
+    const setupEventListeners = () => {
+        // API Key & Settings
+        $("saveApiKey").addEventListener("click", async () => {
+            DB.apikey = $("apikey").value.trim();
+            await storage.set(DB);
+            const stateEl = $("apikeytate");
+            stateEl.textContent = "Saved ✓";
+            setTimeout(() => { stateEl.textContent = ""; }, 2000);
+        });
+
+        // Modals
+        $("showCategoryModalBtn").addEventListener("click", () => categoryModal.show());
+        $("closeCategoryModalBtn").addEventListener("click", categoryModal.hide);
+        $("showProjectModalBtn").addEventListener("click", () => projectModal.show());
+        $("closeProjectModalBtn").addEventListener("click", projectModal.hide);
+
+        // START: NEW Event Listeners for .cls file upload
+        $("uploadClsBtn").addEventListener("click", () => $("categoryClsFile").click());
+        $("categoryClsFile").addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const text = await file.text();
+            $("categoryClsContent").value = text;
+            $("clsFileStatus").textContent = `${file.name} ready to be saved.`;
+        });
+        // END: NEW Event Listeners
+
+        // Category CRUD
+        $("saveCategoryBtn").addEventListener("click", async () => {
+            const id = $("categoryId").value || `cat-${Date.now()}`;
+            const existingCat = DB.categories.find(c => c.id === id);
+            const newCat = {
+                id,
+                name: $("categoryName").value.trim(),
+                keywords: $("categoryKeywords").value.split(',').map(k => k.trim()).filter(Boolean),
+                latex: $("categoryLatex").value.trim(),
+                // ADDED: Save the .cls file content from our hidden textarea
+                clsFileContent: $("categoryClsContent").value.trim()
+            };
+            const index = DB.categories.findIndex(c => c.id === id);
+            if (index > -1) {
+                DB.categories[index] = newCat;
+            } else {
+                DB.categories.push(newCat);
+            }
+            await storage.set(DB);
+            renderAll();
+            categoryModal.hide();
+        });
+
+        $("categoryList").addEventListener("click", async (e) => {
+            const target = e.target;
+            const id = target.dataset.id;
+            if (!id) return;
+
+            if (target.classList.contains("edit-cat")) {
+                const cat = DB.categories.find(c => c.id === id);
+                categoryModal.show(cat);
+            } else if (target.classList.contains("delete-cat")) {
+                if (confirm("Are you sure you want to delete this category?")) {
+                    DB.categories = DB.categories.filter(c => c.id !== id);
+                    DB.projects.forEach(p => { p.categoryIds = p.categoryIds.filter(catId => catId !== id); });
+                    await storage.set(DB);
+                    renderAll();
+                }
+            }
+        });
+
+        // Project CRUD
+        $("saveProjectBtn").addEventListener("click", async () => {
+            const id = $("projectId").value || `proj-${Date.now()}`;
+            const selectedCatIds = Array.from($("projectCategoryAssociation").querySelectorAll("input:checked")).map(el => el.value);
+            const newProj = {
+                id,
+                name: $("projectName").value.trim(),
+                dates: $("projectDates").value.trim(),
+                link: $("projectLink").value.trim(),
+                bullets: $("projectBullets").value.split('\n').map(b => b.trim()).filter(Boolean),
+                categoryIds: selectedCatIds,
+            };
+            const index = DB.projects.findIndex(p => p.id === id);
+            if (index > -1) {
+                DB.projects[index] = newProj;
+            } else {
+                DB.projects.push(newProj);
+            }
+            await storage.set(DB);
+            renderAll();
+            projectModal.hide();
+        });
+
+        $("projectList").addEventListener("click", async (e) => {
+            const target = e.target;
+            const id = target.dataset.id;
+            if (!id) return;
+
+            if (target.classList.contains("edit-proj")) {
+                const proj = DB.projects.find(p => p.id === id);
+                projectModal.show(proj);
+            } else if (target.classList.contains("delete-proj")) {
+                if (confirm("Are you sure you want to delete this project?")) {
+                    DB.projects = DB.projects.filter(p => p.id !== id);
+                    await storage.set(DB);
+                    renderAll();
+                }
+            }
+        });
+        
+        // Import / Export
+        $("export").addEventListener("click", async () => {
+            const data = await storage.get();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a"); a.href = url; a.download = "ats-enhancer-data.json"; a.click(); URL.revokeObjectURL(url);
+        });
+
+        $("importBtn").addEventListener("click", () => $("importFile").click());
+        $("importFile").addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const content = await file.text();
+                const data = JSON.parse(content);
+                if (confirm("This will overwrite all current data. Continue?")) {
+                    await storage.set(data);
+                    await load();
+                }
+            } catch (err) {
+                alert("Invalid JSON file.");
+                console.error("Import error:", err);
+            }
+        });
+    };
+
+    // --- Initialization ---
+    const load = async () => {
+        DB = await storage.get();
+        $("apikey").value = DB.apikey || "";
+        renderAll();
+    };
+
+    setupEventListeners();
+    load();
 });
