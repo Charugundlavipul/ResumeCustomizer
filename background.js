@@ -7,6 +7,23 @@ try {
   console.warn("JSZip failed to load; zip compilation will be skipped.", e);
 }
 
+function labelToLatexPattern(label) {
+  // 1) Escape regex metachars
+  let L = String(label || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // 2) Handle LaTeX-escaped specials inside \textbf{...}
+  // Make "&" match either "&" or "\&" (tolerant), then escape other LaTeX specials.
+  L = L
+    .replace(/&/g, "(?:\\\\&|&)") // accept both, match your template's \&
+    .replace(/%/g, "\\\\%")
+    .replace(/\$/g, "\\\\$")
+    .replace(/#/g, "\\\\#")
+    .replace(/_/g, "\\\\_")
+    .replace(/\{/g, "\\\\{")
+    .replace(/\}/g, "\\\\}");
+  return L;
+}
+
+
 /** ───────────────────────────────── CONFIG ─────────────────────────────────
  * How should the model return bullets?
  * - "TEXT": model returns plain text (no LaTeX). We escape safely on-device.  ← recommended
@@ -100,27 +117,37 @@ function safeJsonFromGemini(raw) {
   if (!raw) return null;
   let txt = String(raw).trim();
 
+  // Strip code fences if present
   if (txt.startsWith("```")) {
     txt = txt.replace(/^(?:```(?:json)?\s*)|(?:\s*```)$/g, "").trim();
   }
 
-  if (!txt.startsWith("{")) {
-    const first = txt.indexOf("{");
-    const last = txt.lastIndexOf("}");
-    if (first === -1 || last === -1 || last <= first) {
-      console.warn("safeJsonFromGemini could not find a valid JSON object.", raw);
-      return null;
-    }
+  // Seek the first {...} or [...] blob if the model wrapped text around it
+  if (!/^[{\[]/.test(txt)) {
+    const first = txt.search(/[{\[]/);
+    const lastObj = txt.lastIndexOf("}");
+    const lastArr = txt.lastIndexOf("]");
+    const last = Math.max(lastObj, lastArr);
+    if (first === -1 || last === -1 || last <= first) return null;
     txt = txt.slice(first, last + 1);
   }
+
+  // 🔧 KEY PATCH: make JSON-valid escapes
+  // Any backslash not starting a legal JSON escape becomes a double backslash.
+  // Fixes \% \& \_ \{ \} \$ \# etc that LLMs emit for LaTeX.
+  txt = txt.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+
+  // Also remove a UTF-8 BOM if present
+  txt = txt.replace(/^\uFEFF/, "");
 
   try {
     return JSON.parse(txt);
   } catch (e) {
-    console.warn("safeJsonFromGemini failed to parse JSON:", e, txt);
+    console.warn("safeJsonFromGemini failed to parse JSON after sanitize:", e, txt);
     return null;
   }
 }
+
 
 // Hardened parser wrapper that always returns { ops: [] } on failure
 async function robustGeminiParse(resp) {
@@ -315,8 +342,8 @@ async function geminiPlan(
     inResumeKeywords = [],
   } = {}
 ) {
-  const MIN_WORDS = 36;
-  const MAX_WORDS = 40;
+  const MIN_WORDS = 32;
+  const MAX_WORDS = 38;
 
   const formatHint =
     GEMINI_BULLET_FORMAT === "LATEX"
@@ -331,9 +358,9 @@ async function geminiPlan(
 As an AI resume editor, your task is to rewrite resume bullets, making them strictly align with the provided Job Description (JD).
 
 Core Directives
-Prioritize the JD: The rewritten bullets must use the technologies, keywords, and responsibilities from the JD. You are required to change the original bullet's meaning and tech stack to match the JD's focus.
+Prioritize the JD: The rewritten bullets must use the technologies, keywords, and responsibilities from the JD. You are required to change the original bullet's meaning and tech stack to match the JD's focus if it lacks behind.
 
-Never include the word ${company} in any bullet point.
+Never include the word ${company} and if there are any company specific points like their inhouse tools dont use that in any bullet point.
 
 Maintain Structure:
 
@@ -343,7 +370,9 @@ Each bullet must be between ${MIN_WORDS} and ${MAX_WORDS} words.
 
 Preserve Facts:
 
-If you find metrics in any bullet just create another bullet matching the metric and the jd requirement and never include the company name within any bullet.
+If you find metrics in any bullet just create another bullet matching the metric and the jd requirements and include that metric in that bullet point.
+
+generated bullet should be always more optimized than original bullet or else keep the original one
 
 Each generated bullet should be perfectly aligned with jd, don't care about original meaning treat the original one as a mere placeholder.
 
@@ -526,7 +555,7 @@ function replaceSectionBullets(tex, sectionName, newBullets) {
 }
 
 function extractSkillLine(tex, label) {
-  const L = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const L = labelToLatexPattern(label);
 
   const rxA = new RegExp(
     `(\\\\item\\s*\\\\textbf\\{${L}\\}\\{:\\s*)([^}]+)(\\})`,
@@ -546,7 +575,7 @@ function extractSkillLine(tex, label) {
 }
 
 function replaceSkillLine(tex, label, csv) {
-  const L = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const L = labelToLatexPattern(label);
   const items = csv
     .split(",")
     .map((s) => s.trim())
@@ -628,32 +657,21 @@ function ensureMetricsPreserved(originalBullet, newBullet) {
 }
 
 function normalizeAIBulletsForSection(originalBulletsLive, aiBulletsRaw, format = GEMINI_BULLET_FORMAT) {
-  let flat = [];
-  for (const b of aiBulletsRaw || []) {
-    const pieces = splitIntoCandidateBullets(b);
-    flat.push(...pieces);
-  }
-
   const want = originalBulletsLive.length;
-  if (flat.length < want) {
-    flat = [...flat, ...Array.from({ length: want - flat.length }, () => "")];
-  } else if (flat.length > want) {
-    flat = flat.slice(0, want);
-  }
+  let flat = (aiBulletsRaw || []).map(s => String(s ?? "").trim());
 
-  flat = flat.map((s, i) => (String(s).trim() === "" ? originalBulletsLive[i] : s));
+  if (flat.length < want) flat = [...flat, ...Array.from({ length: want - flat.length }, (_ , i) => originalBulletsLive[flat.length + i] || "")];
+  if (flat.length > want) flat = flat.slice(0, want);
+
+  flat = flat.map((s, i) => (s ? s : (originalBulletsLive[i] || "")));
   flat = flat.map((nb, idx) => ensureMetricsPreserved(originalBulletsLive[idx] || "", nb));
 
-  if (format === "LATEX") {
-    return flat.map(s =>
-      String(s || "")
-        .replace(/\s*\(\d+\s+words?\)\s*$/i, "")
-        .replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "")
-        .replace(/\s{2,}/g, " ")
-        .trim()
-    );
-  }
-  return flat.map(cleanBullet);
+  const finalize = (s) =>
+    (format === "LATEX"
+      ? String(s || "").replace(/\s*\(\d+\s+words?\)\s*$/i, "").replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "").replace(/\s{2,}/g, " ").trim()
+      : cleanBullet(s));
+
+  return flat.map(finalize);
 }
 
 function splitMergedBulletText(s) {
