@@ -1,72 +1,165 @@
+// MV3 background service worker — cleaned, hardened, and drop-in ready
 
+// === Optional dependency (safe to fail) ===
 try {
-  importScripts(chrome.runtime.getURL('libs/jszip.min.js')); // exposes global JSZip
+  importScripts(chrome.runtime.getURL("libs/jszip.min.js")); // exposes global JSZip
 } catch (e) {
-  console.warn('JSZip failed to load; zip compilation will be skipped.', e);
+  console.warn("JSZip failed to load; zip compilation will be skipped.", e);
 }
-// remove stray Markdown bold markers *word*  →  word
 
-const escapePercents = s => s.replace(/(^|[^\\])%/g, (_, p1) => `${p1}\\%`);
-// replace old escapePercents with this universal escaper
+/** ───────────────────────────────── CONFIG ─────────────────────────────────
+ * How should the model return bullets?
+ * - "TEXT": model returns plain text (no LaTeX). We escape safely on-device.  ← recommended
+ * - "LATEX": model returns already LaTeX-safe text (no \item or environments), we trust it.
+ */
+const GEMINI_BULLET_FORMAT = "TEXT"; // "TEXT" | "LATEX"
 
-// MV3 background service worker
+/** Strictly keep bullet counts; no visible suffix, no metric appenders */
+const ENFORCE_METRIC_VISIBILITY = false; // never append "(retained metrics: ...)" text
 
-// ===== Utilities =====
-const stripBold = s => s.replace(/\\(.+?)\\/g, "$1");
-const escapeLatex = s => {
-    if (!s) return "";
-    return String(s)
-        .replace(/\\/g, '\\textbackslash{}') // Must be first
-        .replace(/%/g,  '\\%')
-        .replace(/&/g,  '\\&')
-        .replace(/#/g,  '\\#')
-        .replace(/\$/g, '\\$')
-        .replace(/_/g,  '\\_')
-        .replace(/{/g,  '\\{')
-        .replace(/}/g,  '\\}')
-        .replace(/~/g,  '\\textasciitilde{}')
-        .replace(/\^/g, '\\textasciicircum{}');
+// ───────────────────────────────── Utilities ─────────────────────────────────
+
+// Only strip stray *markdown* bold, not LaTeX commands.
+const stripBold = (s) => String(s || "").replace(/\*(\S(?:.*?\S)?)\*/g, "$1");
+
+// ── NEW: robust bullet extractor used everywhere (prevents last-item drop)
+// Matches \item bodies until the next \item on a new line OR end-of-body.
+function extractBulletsFromItemizeBody(body) {
+  const src = String(body || "").replace(/\r\n/g, "\n");
+  const re = /(^|\n)\s*\\item\s+([\s\S]*?)(?=\n\s*\\item\b|\s*$)/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(src)) !== null) out.push(m[2].trim());
+  return out;
+}
+
+function getOriginalBulletsFromSection(tex, sectionName) {
+  const sv = getSectionBodyAndCount(tex, sectionName);
+  if (!sv) return [];
+  return extractBulletsFromItemizeBody(sv.body);
+}
+
+// LaTeX escaping that avoids double-escaping existing sequences.
+function escapeLatexSafe(s) {
+  if (!s) return "";
+  let t = String(s);
+
+  const TOKENS = {
+    "\\%": "\uE000",
+    "\\_": "\uE001",
+    "\\{": "\uE002",
+    "\\}": "\uE003",
+    "\\#": "\uE004",
+    "\\$": "\uE005",
+    "\\&": "\uE006",
+    "\\~": "\uE007",
+    "\\^": "\uE008",
+    "\\\\": "\uE009",
+  };
+  const tokenRe = new RegExp(
+    Object.keys(TOKENS).map(k => k.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")).join("|"),
+    "g"
+  );
+  t = t.replace(tokenRe, m => TOKENS[m]);
+
+  t = t
+    .replace(/(?<!\\)%/g, "\\%")
+    .replace(/(?<!\\)&/g, "\\&")
+    .replace(/(?<!\\)#/g, "\\#")
+    .replace(/(?<!\\)\$/g, "\\$")
+    .replace(/(?<!\\)_/g, "\\_")
+    .replace(/(?<!\\)\{/g, "\\{")
+    .replace(/(?<!\\)\}/g, "\\}")
+    .replace(/(?<!\\)~/g, "\\textasciitilde{}")
+    .replace(/(?<!\\)\^/g, "\\textasciicircum{}");
+
+  for (const [k, v] of Object.entries(TOKENS)) {
+    const vr = new RegExp(v, "g");
+    t = t.replace(vr, k);
+  }
+  return t;
+}
+
+const escapeLatex = escapeLatexSafe;
+
+const cleanBullet = (s) =>
+  escapeLatex(stripBold(String(s || "")))
+    .replace(/\s*\(\d+\s+words?\)\s*$/i, "")
+    .replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+// Remove simple LaTeX commands like \textbf{...} -> keep inner text
+const stripLatex = (s) => {
+  if (!s) return "";
+  return String(s).replace(/\\textbf\{([^}]+)\}/g, "$1");
 };
+
+// Safer JSON un-fencer for Gemini responses
 function safeJsonFromGemini(raw) {
-    if (!raw) return null;
-    let txt = raw.trim();
-    // More robustly strips markdown code fences
-    if (txt.startsWith("```")) {
-        txt = txt.replace(/^(?:```(?:json)?\s*)|(?:\s*```)$/g, "").trim();
+  if (!raw) return null;
+  let txt = String(raw).trim();
+
+  if (txt.startsWith("```")) {
+    txt = txt.replace(/^(?:```(?:json)?\s*)|(?:\s*```)$/g, "").trim();
+  }
+
+  if (!txt.startsWith("{")) {
+    const first = txt.indexOf("{");
+    const last = txt.lastIndexOf("}");
+    if (first === -1 || last === -1 || last <= first) {
+      console.warn("safeJsonFromGemini could not find a valid JSON object.", raw);
+      return null;
     }
-    // Fallback to find the first and last curly brace
-    if (!txt.startsWith("{")) {
-        const first = txt.indexOf("{");
-        const last = txt.lastIndexOf("}");
-        if (first === -1 || last === -1 || last <= first) return null;
-        txt = txt.slice(first, last + 1);
-    }
-    try {
-        // Try parsing the cleaned text
-        return JSON.parse(txt);
-    } catch (e) {
-        console.warn("safeJsonFromGemini failed to parse:", e, raw);
-        return null;
-    }
+    txt = txt.slice(first, last + 1);
+  }
+
+  try {
+    return JSON.parse(txt);
+  } catch (e) {
+    console.warn("safeJsonFromGemini failed to parse JSON:", e, txt);
+    return null;
+  }
+}
+
+// Hardened parser wrapper that always returns { ops: [] } on failure
+async function robustGeminiParse(resp) {
+  const raw = resp?.trim?.() || "";
+  const parsed = safeJsonFromGemini(raw);
+  if (parsed?.ops && Array.isArray(parsed.ops)) return parsed;
+
+  console.error(
+    "🔴 GEMINI reply could not be parsed into a valid {ops: []} structure ↓↓↓\n" +
+      raw
+  );
+  return { ops: [] };
 }
 
 function formatSectionDump(sections, maxChars = 7000) {
-    let out = "";
-    for (const s of sections) {
-        out += `▼ ${s.name} (${s.bullets.length})\n`;
-        s.bullets.forEach(b => { out += `  • ${b}\n`; });
-        out += "\n";
-        if (out.length > maxChars) {
-            out += "…\n";
-            break;
-        }
+  let out = "";
+  for (const s of sections) {
+    out += `▼ ${s.name} (${s.bullets.length})\n`;
+    s.bullets.forEach((b) => {
+      out += `  • ${b}\n`;
+    });
+    out += "\n";
+    if (out.length > maxChars) {
+      out += "…\n";
+      break;
     }
-    return out.trim();
+  }
+  return out.trim();
 }
-// ===== Gemini API Callers =====
+
+// ───────────────────────────── Gemini API callers ─────────────────────────────
+
 async function geminiRefineSkills(apikey, jd, skillsLines, mustInclude = []) {
-    const skillsDump = Object.entries(skillsLines).map(([k, v]) => `${k}: ${v}`).join("\n");
-    const prompt = `You are an AI assistant that refines resume skill sections to match a job description. Your task is to take the user's current skill lines, a job description, and a mandatory list of skills, then generate a JSON array of 'replace_skill_csv' operations to update the skills.
+  const skillsDump = Object.entries(skillsLines)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
+
+  const prompt = `
+You are an AI assistant that refines resume skill sections to match a job description. Your task is to take the user's current skill lines, a job description, and a mandatory list of skills, then generate a JSON array of 'replace_skill_csv' operations to update the skills.
 
 ## JSON OUTPUT SPECIFICATION
 - Your entire response MUST be a single raw JSON object. Do not add markdown wrappers.
@@ -79,9 +172,10 @@ async function geminiRefineSkills(apikey, jd, skillsLines, mustInclude = []) {
   }
 
 ## PROCESSING LOGIC
-1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, determine the most appropriate skill line and add the skill to that line's CSV. Do not duplicate it.
+1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, determine the most appropriate skill line and add the skill to that line's CSV somewhere in the middle. Do not duplicate it and add only 80% of words from required skill line if there are more than 5 in total.
 2. **Refine Existing Skills**: Analyze the job description and subtly re-order or adjust existing skills to align with the job's priorities.
 3. **Maintain Original Labels**: Keep the original 'label' for each skill line.
+4. While modifying csv array if you fell the tool is not at all relevant to any of the jd's requirement then you can remove that tool from the final answer you can only remove maximum of 4 items in the entire skills section.
 
 ## INPUTS
 ### Job Description:
@@ -91,18 +185,38 @@ ${mustInclude.join(", ") || "None"}
 ### CURRENT SKILL LINES:
 ${skillsDump}`.trim();
 
-    const payload = {
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0, topP: 0.9, maxOutputTokens: 4000 }
-    };
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apikey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) throw new Error(`Gemini Refine Skills API error: ${res.status}`);
-    const data = await res.json();
-    return safeJsonFromGemini(data?.candidates?.[0]?.content?.parts?.[0]?.text || "")?.ops || [];
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0,
+      topP: 0.9,
+      maxOutputTokens: 4000,
+    },
+  };
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+      apikey
+    )}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) throw new Error(`Gemini Refine Skills API error: ${res.status}`);
+  const data = await res.json();
+  return (
+    safeJsonFromGemini(
+      data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+    )?.ops || []
+  );
 }
 
 async function geminiExtractMissing(apikey, jd, userKeywords = []) {
-    const prompt = `You are an expert ATS keyword extractor. Your sole purpose is to generate a single, valid JSON object based on the provided Job Description (JD) and a list of user-supplied keywords.
+  const prompt = `
+You are an expert ATS keyword extractor. Your sole purpose is to generate a single, valid JSON object based on the provided Job Description (JD) and a list of user-supplied keywords.
 
 ## TASK
 Analyze the JD and identify technical skills and other important keywords that are present in the JD but *absent* from the user-supplied keyword list.
@@ -116,7 +230,7 @@ Your entire response MUST be a single raw JSON object.
 
 ### Key Descriptions:
 - **skills**: An array of up to 12 strictly technical skills (frameworks, tools, databases) from the JD, not in the user's list.
-- **important**: An array of up to 12 high-impact keywords (methodologies, qualifications like "performance optimization", "CI/CD pipelines") from the JD.
+- **important**: An array of up to 12 high-impact keywords (methodologies, qualifications like "performance optimization", "CI/CD pipelines") from the JD do not extract keyword which are non technical or pay/wage related.
 
 ## RULES
 1. **Strict Exclusion**: Keywords in the output MUST NOT be in the "User-Supplied Keywords" list.
@@ -129,732 +243,687 @@ ${jd.slice(0, 8000)}
 ### User-Supplied Keywords:
 ${(userKeywords || []).join(", ")}`.trim();
 
-    const payload = {
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0, maxOutputTokens: 2000 }
-    };
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apikey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) throw new Error(`Gemini Extract Missing API error: ${res.status}`);
-    const data = await res.json();
-    const obj = safeJsonFromGemini(data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}");
-    return {
-        skillsMissing: Array.isArray(obj?.skills) ? obj.skills : [],
-        importantMissing: Array.isArray(obj?.important) ? obj.important : []
-    };
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0,
+      maxOutputTokens: 2000,
+    },
+  };
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+      apikey
+    )}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) throw new Error(`Gemini Extract Missing API error: ${res.status}`);
+  const data = await res.json();
+  const obj =
+    safeJsonFromGemini(
+      data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}"
+    ) || {};
+  return {
+    skillsMissing: Array.isArray(obj?.skills) ? obj.skills : [],
+    importantMissing: Array.isArray(obj?.important) ? obj.important : [],
+  };
 }
 
-async function geminiPlan(apikey, jd, userPrompt, tex, { importantMissing = [] }) {
-    const refinedPolicy = `You are an expert resume editor specializing in ATS optimization. Enhance the user's existing resume bullet points to be more impactful while adhering to all rules.
+/** ── NEW: collect verified skills from the resume to keep substitutions truthful */
+function collectResumeSkillKeywords(tex) {
+  const labels = [
+    "Programming Languages",
+    "Frameworks & Libraries",
+    "Databases",
+    "Tools and Technologies",
+    "Cloud & DevOps",
+    "Development Practices",
+    "Certifications",
+  ];
+  const seen = new Set();
+  const ordered = [];
+  for (const lab of labels) {
+    const line = extractSkillLine(tex, lab);
+    if (!line) continue;
+    const items = stripLatex(line.items)
+      .split(",")
+      .map(s => s.trim())
+      .filter(Boolean);
+    for (const item of items) {
+      const key = item.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(item);
+    }
+  }
+  return ordered;
+}
 
-## STRICT RULES
-1. **Word Count Windows**: Each rewritten bullet MUST fall within its specific word count window (e.g., a 15-word bullet with a "15-20" window must be rewritten to 15-20 words).
-2. **Weave in Keywords**: In each bullet, include one or two words from the 'Important Words' list. Integrate them naturally.
-3. **Preserve Core Meaning**: Keep the original intent. All numbers, metrics, and proper nouns must be preserved.
-4. **Maintain Structure**: Do NOT add, delete, or reorder bullets.
+async function geminiPlan(
+  apikey,
+  company,
+  jd,
+  userPrompt,
+  tex,
+  {
+    targetKeywords = [],
+    inResumeKeywords = [],
+  } = {}
+) {
+  const MIN_WORDS = 36;
+  const MAX_WORDS = 40;
 
-## OUTPUT FORMAT
-Return a single, raw JSON object using the 'replace_bullets' operation.`;
+  const formatHint =
+    GEMINI_BULLET_FORMAT === "LATEX"
+      ? `Return bullets that are LaTeX-safe text, but DO NOT include LaTeX list commands (no "\\item", no "itemize" blocks).`
+      : `Return bullets as plain natural-language text with NO LaTeX markup.`;
 
-    const instructionBlock = userPrompt?.trim() ? `## USER PROMPT (Highest Priority)\n${userPrompt.trim()}\n` : "";
-    // **CHANGE**: This now parses the complete, dynamically built LaTeX file
-    const targetSections = allRewriteableSections(tex);
-    if (!targetSections.length) return [];
+  const tgt = (targetKeywords || []).filter(Boolean).slice(0, 80).join(", ");
+  const verified = (inResumeKeywords || []).filter(Boolean).slice(0, 160).join(", ");
 
-    const limits = targetSections.flatMap(sec => sec.bullets.map(b => `${b.split(/\s+/).length}-${b.split(/\s+/).length + 5}`)).join(", ");
-    const schema = `Return STRICT JSON ONLY:\n{"ops":[{"op":"replace_bullets","section":"Section Name","bullets":["...", "..."]}]}`;
+  // ───────── JD-ONLY LEXICON + DEVIATION ALLOWED (TRUTHFUL) ─────────
+  const refinedPolicy = `
+As an AI resume editor, your task is to rewrite resume bullets, making them strictly align with the provided Job Description (JD).
 
-    const payload = {
-        contents: [{ role: "user", parts: [{ text: `
+Core Directives
+Prioritize the JD: The rewritten bullets must use the technologies, keywords, and responsibilities from the JD. You are required to change the original bullet's meaning and tech stack to match the JD's focus.
+
+Never include the word ${company} in any bullet point.
+
+Maintain Structure:
+
+Keep the exact number of bullets per section and preserve their original order.
+
+Each bullet must be between ${MIN_WORDS} and ${MAX_WORDS} words.
+
+Preserve Facts:
+
+If you find metrics in any bullet just create another bullet matching the metric and the jd requirement and never include the company name within any bullet.
+
+Each generated bullet should be perfectly aligned with jd, don't care about original meaning treat the original one as a mere placeholder.
+
+If jd has multiple technologies or languages focus more on the one which was given highest importance of all like if you see multiple libraries or frameworks mentioned in jd then focus on the one which is mentioned the most or given highest importance.
+
+Writing Style: Write each bullet as a single, dense sentence that starts with a strong action verb. Avoid filler words (e.g., "successfully," "various").
+Every point should be construcuted with extreme precision, no fluff if you want to explain something like include micro details like versions of technologies etc properly mention details and do not generalize.
+Make sure the tools are not repeting(not more than 2 times) in the final overall answer.
+`;
+
+  const instructionBlock = userPrompt?.trim()
+    ? `## USER PROMPT (Respect the spirit if provided)\n${userPrompt.trim()}\n`
+    : "";
+
+  const targetSections = allRewriteableSections(tex);
+  if (!targetSections.length) return [];
+
+  const sectionsDump = formatSectionDump(targetSections);
+
+  const windowReminder = targetSections
+    .map(sec => sec.bullets.map(() => `${MIN_WORDS}-${MAX_WORDS}`).join(", "))
+    .join("; ");
+
+  const schema =
+    'Return STRICT JSON ONLY:\n{"ops":[{"op":"replace_bullets","section":"Section Name","bullets":["...", "..."]}]}';
+
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `
 ${refinedPolicy}
 ${instructionBlock}
 ## INPUTS
 ### Job Description:
-${jd.slice(0, 5000)}
-### Important Words (to include):
-${importantMissing.join(", ") || "None"}
-### Current Bullets & Their Word Count Windows:
-${formatSectionDump(targetSections)}
-*Required word count windows (in order): [${limits}]*
+${String(jd).slice(0, 5000)}
+
+### TARGET ROLE STACK (from JD/Category) — prioritize these:
+${tgt || "None"}
+
+### Current Bullets (keep same COUNT & ORDER; rewrite EACH to ${MIN_WORDS}-${MAX_WORDS} words; PRESERVE existing metrics):
+${sectionsDump}
+
+### Required word-count window for each bullet (by position):
+[${windowReminder}]
+
 ## OUTPUT FORMAT
-${schema}` }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2, topP: 0.8, maxOutputTokens: 4000 }
-    };
-
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apikey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) throw new Error(`Gemini Plan API error: ${res.status}`);
-    const data = await res.json();
-    const obj = await robustGeminiParse(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
-    
-    // **CHANGE**: Reconcile against the combined list of sections
-    const sectionMap = Object.fromEntries(targetSections.map(s => [s.name.toLowerCase(), s]));
-    return reconcileBulletCounts(obj.ops, sectionMap);
-}
-
-async function robustGeminiParse(resp) {
-    const raw = resp?.trim?.() || "";
-    const parsed = safeJsonFromGemini(raw);
-    if (!parsed?.ops) {
-        console.error("🔴 GEMINI reply could not be parsed into {ops: []} structure ↓↓↓\n" + raw);
-        return { ops: [] };
-    }
-    return parsed;
-}
-const STOPWORDS = new Set(
-  "and or the a an to of in on for with by from at as is are was were be being been into about over under this that these those it its their our your you we they i will can may might should must vs via per"
-    .split(" ")
-);
-const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9+\-#_. ]/g, " ").replace(/\s+/g, " ").trim();
-
-function naiveStem(token) {
-  let t = token.toLowerCase();
-  for (const suf of ["ing","edly","ed","es","s"]) {
-    if (t.endsWith(suf) && t.length > suf.length + 2) {
-      t = t.slice(0, -suf.length);
-      break;
-    }
-  }
-  return t;
-}
-
-async function geminiRefineSkills(apikey, jd, skillsLines, mustInclude = []) {
-  
-  const skillsDump = Object.entries(skillsLines)
-        .map(([k,v]) => `${k}: ${v}`).join("\\n");
-
-  const prompt = `You are an AI assistant that refines resume skill sections to match a job description.
-Your task is to take the user's current skill lines, a job description, and a mandatory list of skills, then generate a JSON array of 'replace_skill_csv' operations to update the skills.
-
-## JSON OUTPUT SPECIFICATION
-- Your entire response MUST be a single raw JSON object. Do not add markdown like \\\`json or any other text.
-- The root of the object must be a key "ops" containing an array of objects.
-- Each object in the "ops" array must have this exact structure:
-  {
-    "op": "replace_skill_csv",
-    "label": "string", // The original label, e.g., "Programming Languages"
-    "csv": "string"    // The new, refined comma-separated list of skills.
-  }
-
-## PROCESSING LOGIC & RULES
-Follow these steps in order:
-
-1.  *Core Mandate - Incorporate Mandatory Skills*: This is the highest priority. For EACH skill in the "Mandatory Skills to Include" list:
-    a. Determine the most appropriate skill line (label) from the "CURRENT SKILL LINES" to add it to.
-    b. Add the skill to that line's CSV in between, not at the end.
-    c. Do not duplicate it if it already exists.
-    
-
-2.  *Final Formatting*:
-    a. Ensure the final output is a valid JSON array as specified.
-    b. Keep the original 'label' for each skill line.
-    c. Do not invent any skills that are not from the mandatory list, the original skill lines, or the job description.
-
-## INPUTS
-
-### Job Description:
-${jd.slice(0, 5000)}
-
-### Mandatory Skills to Include:
-${mustInclude.join(", ") || "None"}
-
-### CURRENT SKILL LINES:
-${skillsDump}`.trim();
-
-
-  const payload = {
-    contents:[{role:"user",parts:[{text:`
-${prompt}
-
-Job description (trimmed):
-${jd.slice(0,5000)}
-
-CURRENT SKILL LINES:
-${skillsDump}
-`}]}],
-    generationConfig:{temperature:0,topK:1,topP:0.9,maxOutputTokens:4000}
+${schema}`.trim(),
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.15,
+      topP: 0.8,
+      maxOutputTokens: 5000,
+    },
   };
 
   const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="+
-    encodeURIComponent(apikey),
-    {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+      apikey
+    )}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
   );
+  if (!res.ok) throw new Error(`Gemini Plan API error: ${res.status}`);
   const data = await res.json();
-  return safeJsonFromGemini(
-           data?.candidates?.[0]?.content?.parts?.[0]?.text||"")?.ops || [];
-}
-
-
-function safeJsonFromGemini(raw) {
-  if (!raw) return null;
-  let txt = raw.trim();
-
-  // Strip  fences and a leading “json”
-  if (txt.startsWith(""))
-    txt = txt.replace(/^(?:json)?\s*/i, "")
-             .replace(/$/i, "")
-             .trim();
-  txt = txt.replace(/^json\s*/i, "").trim();
-  txt = txt.replace(/\\([^"\\\/bfnrtu])/g, "\\\\$1");
-
-  // First attempt – maybe it’s already clean
-  try { return JSON.parse(txt); } catch (_) {}
-
-  // Fallback – cut from first { … last }
-  const first = txt.indexOf("{");
-  const last  = txt.lastIndexOf("}");
-  if (first === -1 || last === -1 || last <= first) return null;
-
-  try { return JSON.parse(txt.slice(first, last + 1)); } catch (_) {}
-
-  // Give up
-  return null;
-}
-
-
-function formatSectionDump(sections, maxChars = 7000) {
-  // produce a concise dump that still fits in the context window
-  let out = "";
-  for (const s of sections) {
-    out += `▼ ${s.name} (${s.bullets.length})\n`;
-    for (let i = 0; i < s.bullets.length; i++) {
-      out += `  • ${s.bullets[i]}\n`;
-    }
-    out += "\n";
-    if (out.length > maxChars) { out += "…\n"; break; }
-  }
-  return out.trim();
-}
-
-async function robustGeminiParse(resp) {
-  // resp is whatever data?.candidates?.[0]?.content?.parts?.[0]?.text
-  const raw = resp?.trim?.() || "";
-  let parsed = safeJsonFromGemini(raw);
-
-  // ── Fallback #1 – look for nested { "ops": … } envelope ──
-  if (!parsed?.ops) {
-    try {
-      const m = raw.match(/\{[\s\S]"ops"\s:\s*\[[\s\S]?\}[\s\S]?\}/);
-      if (m) parsed = JSON.parse(m[0]);
-    } catch (_) {}
-  }
-
-  // ── Fallback #2 – try to reach second candidate ──
-  if (!parsed?.ops && resp?.candidates?.[1]) {
-    parsed = safeJsonFromGemini(
-      data.candidates[1]?.content?.parts?.[0]?.text || ""
-    );
-  }
-
-  // ── Give up but don’t crash the worker ──
-  if (!parsed?.ops) {
-    console.error("🔴 GEMINI reply could not be parsed ↓↓↓\n" + raw);
-    return { ops: [] };          // empty list instead of exception
-  }
-  return parsed;
-}
-
-
-// ───── NEW helper ─────
-async function geminiExtractMissing(apikey, jd, userKeywords = []) {
-
-
-  const payload = {
-    contents: [{
-      role: "user",
-      parts: [{
-        text: `You are an expert ATS keyword extractor. Your sole purpose is to generate a single, valid JSON object based on the provided Job Description (JD) and a list of user-supplied keywords. Do not include any explanations or conversational text in your response.
-
-## TASK
-Analyze the JD and identify technical skills and other important keywords that are present in the JD but *absent* from the user-supplied keyword list.
-
-## JSON OUTPUT SPECIFICATION
-Your entire response MUST be a single raw JSON object, without any markdown wrappers like \\\`json.
-The JSON object must strictly adhere to the following schema:
-{
-  "skills": ["string"],
-  "important": ["string"]
-}
-
-### Key Descriptions:
-- *skills*: An array of strings. Populate this with upto 12 Strictly with technical skills, frameworks, tools, cloud platforms, and databases only found in the JD but not in the user's list.
-- **important**: An array of strings. Populate this with up to 12 high-impact, ATS-friendly keywords from the JD. These should be specific, integratable terms like skills, methodologies, or qualifications (e.g., "performance optimization", "CI/CD pipelines") and not broad concepts (e.g., "computer science").
-
-## RULES
-1.  *Strict Exclusion*: Every keyword in the final JSON output MUST NOT be present in the "User-Supplied Keywords" list.
-2.  *JD Source Only*: Every keyword in the final JSON output MUST appear verbatim in the "JD Text".
-3.  *Limit*: The "important" array must not contain more than 12 items.
-4.  *Empty is OK*: If no matching keywords are found for a category, return an empty array '[]'.
-5.  *Trivial Words*: Exclude common stop-words and trivial English words.
-
-## INPUTS
-
-### JD Text:
-${jd}
-
-### User-Supplied Keywords:
-${(userKeywords||[]).join(", ")}`.trim()
-      }]
-    }],
-    generationConfig: { temperature: 0, maxOutputTokens: 5000 }
-  };
-
-  const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="+
-    encodeURIComponent(apikey),
-    { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(payload)}
+  const obj = await robustGeminiParse(
+    data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
   );
-  if (!res.ok) throw new Error("Gemini extract call failed: "+res.status);
-  const data = await res.json();
-  // … after you get the raw text             ↓ original line
-let txt = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "{}";
 
-// ── NEW: unwrap json …  or  …  if present ──
-if (txt.startsWith("")) {
-  // remove the opening json or  plus the closing 
-  txt = txt.replace(/^(?:json)?\s*|\s*$/g, "").trim();
-}
-
-// optional extra: grab the first {...} block if still not pure JSON
-if (!txt.startsWith("{")) {
-  const m = txt.match(/\{[\s\S]*?\}/);
-  if (m) txt = m[0];
-}
-
-let obj = {};
-try { obj = JSON.parse(txt); }
-catch (e) { console.warn("Gemini missing-extract JSON.parse failed", e, txt); }
-console.log("Gemini extract missing (skills) →", obj.skills);
-console.log("Gemini extract missing (important) →", obj.important);
-
-return {
-  skillsMissing: Array.isArray(obj.skills)    ? obj.skills    : [],
-  importantMissing: Array.isArray(obj.important) ? obj.important : []
-};
-
-  
+  return obj.ops || [];
 }
 
 
-function tokenize(text) { const words = normalize(text).split(" ").filter(Boolean); const keep=[]; for(const w of words){ if(!STOPWORDS.has(w)&&w.length>=3) keep.push(naiveStem(w)); } return [...new Set(keep)]; }
-function diffMissing(jdText, resumeKeywordList) { const jdTokens = tokenize(jdText); const resumeTokens = new Set((resumeKeywordList||[]).map(k=>naiveStem(k))); return jdTokens.filter(t=>!resumeTokens.has(t)).slice(0,80); }
+// ───────────────────────────── LaTeX helpers ─────────────────────────────
 
-// ===== LaTeX Parsers & Manipulators =====
-function findSubsections(tex) { // For Work Experience
-    const sections = [];
-    const sectionRegex = /\\resumeSubheading\s*\{([^}]*)\}[\s\S]*?\\begin\{itemize\}([\s\S]*?)\\end\{itemize\}/g;
-    let match;
-    while ((match = sectionRegex.exec(tex)) !== null) {
-        const [, title, bulletsBody] = match;
-        const bullets = (bulletsBody.match(/\\item\s+([\s\S]*?)(?=\\item|\\end\{itemize\})/g) || []).map(b => b.replace(/\\item\s+/, '').trim());
-        if (title.trim() && bullets.length > 0) {
-             sections.push({ name: title.trim(), bullets });
-        }
+function findSubsections(tex) {
+  const sections = [];
+  const sectionRegex =
+    /\\resumeSubheading\s*\{([^}]*)\}[\s\S]*?\\begin\{itemize\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{itemize\}/g;
+  let match;
+  while ((match = sectionRegex.exec(tex)) !== null) {
+    const [, title, bulletsBody] = match;
+    const bullets = extractBulletsFromItemizeBody(bulletsBody);
+    if (title.trim() && bullets.length > 0) {
+      sections.push({ name: title.trim(), bullets });
     }
-    return sections;
+  }
+  return sections;
 }
 
-function findProjectSections(tex) { // **NEW**: Specifically for Projects
-    const sections = [];
-    const projectBlockRegex = /\\resumeProjectHeading\s*\{([\s\S]*?)\}\{[\s\S]*?\}\s*\\begin\{itemize\}([\s\S]*?)\\end\{itemize\}/g;
-    let match;
-    while ((match = projectBlockRegex.exec(tex)) !== null) {
-        const [, header, bulletsBody] = match;
-        const nameMatch = header.match(/\\textbf\{([^}]+)\}/);
-        const name = nameMatch ? nameMatch[1].trim() : "Unknown Project";
-        const bullets = (bulletsBody.match(/\\item\s+([\s\S]*?)(?=\\item|\\end\{itemize\})/g) || []).map(b => b.replace(/\\item\s+/, '').trim());
-         if (name && bullets.length > 0) {
-            sections.push({ name, bullets });
-        }
+function findProjectSections(tex) {
+  const sections = [];
+  const projectBlockRegex =
+    /\\resumeProjectHeading\s*\{([\s\S]*?)\}\{[\s\S]*?\}\s*\\begin\{itemize\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{itemize\}/g;
+  let match;
+  while ((match = projectBlockRegex.exec(tex)) !== null) {
+    const [, header, bulletsBody] = match;
+    const nameMatch = header.match(/\\textbf\{([^}]+)\}/);
+    const name = nameMatch ? nameMatch[1].trim() : "Unknown Project";
+    const bullets = extractBulletsFromItemizeBody(bulletsBody);
+    if (name && bullets.length > 0) {
+      sections.push({ name, bullets });
     }
-    return sections;
+  }
+  return sections;
 }
 
-function allRewriteableSections(tex) { // **NEW**: Combines work and projects
-    const experience = findSubsections(tex);
-    const projects = findProjectSections(tex);
-    return [...experience, ...projects];
+function allRewriteableSections(tex) {
+  return [...findSubsections(tex), ...findProjectSections(tex)];
+}
+
+const normalizeTitle = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+function countItemsInMatchedBody(texSectionBody) {
+  return extractBulletsFromItemizeBody(texSectionBody).length;
+}
+
+function getSectionBodyAndCount(tex, sectionName) {
+  const escapedName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rxSub = new RegExp(
+    `(\\\\resumeSubheading\\s*\\{[\\s\\S]*?${escapedName}[\\s\\S]*?\\}[\\s\\S]*?` +
+      `\\\\begin\\{itemize\\}(?:\\[[^\\]]*\\])?)` +
+      `([\\s\\S]*?)` +
+      `(\\\\end\\{itemize\\})`,
+    "i"
+  );
+  const rxProj = new RegExp(
+    `(\\\\resumeProjectHeading[\\s\\S]*?\\{[\\s\\S]*?${escapedName}[\\s\\S]*?\\}[\\s\\S]*?` +
+      `\\\\begin\\{itemize\\}(?:\\[[^\\]]*\\])?)` +
+      `([\\s\\S]*?)` +
+      `(\\\\end\\{itemize\\})`,
+    "i"
+  );
+
+  const m = tex.match(rxSub) || tex.match(rxProj);
+  if (!m) return null;
+  const [, pre, body, post] = m;
+  return { pre, body, post, wantCount: countItemsInMatchedBody(body) };
+}
+
+function buildItemizeBody(bullets) {
+  return `\n    \\item ${bullets.join("\n    \\item ")}\n`;
+}
+
+function safeReplaceSectionBullets(tex, sectionName, newBullets) {
+  const sv = getSectionBodyAndCount(tex, sectionName);
+  if (!sv) return tex;
+
+  let rebuilt = buildItemizeBody(newBullets);
+  let out = tex.replace(sv.pre + sv.body + sv.post, sv.pre + rebuilt + sv.post);
+
+  const after = getSectionBodyAndCount(out, sectionName);
+  if (after) {
+    const have = countItemsInMatchedBody(after.body);
+    const want = newBullets.length;
+    if (have !== want) {
+      rebuilt = buildItemizeBody(newBullets);
+      out = tex.replace(sv.pre + sv.body + sv.post, sv.pre + rebuilt + sv.post);
+    }
+  }
+  return out;
 }
 
 function replaceSectionBullets(tex, sectionName, newBullets) {
-    const escapedName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(${escapedName}[\\s\\S]*?\\\\begin\\{itemize\\})([\\s\\S]*?)(\\\\end\\{itemize\\})`);
-    if (!tex.match(regex)) {
-        console.warn(`Could not find section "${sectionName}" to replace bullets.`);
-        return tex;
-    }
-    return tex.replace(regex, (full, pre, _body, post) => {
-        const rebuilt = "\n  \\item " + newBullets.join("\n  \\item ") + "\n";
-        return pre + rebuilt + post;
-    });
+  return safeReplaceSectionBullets(tex, sectionName, newBullets);
 }
 
 function extractSkillLine(tex, label) {
-    const rx = new RegExp(`(\\\\item\\s*\\\\textbf\\{${label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\}\\{:\\s)([^}]+)(\\})`, "m");
-    const m = tex.match(rx);
-    return m ? { items: m[2].trim() } : null;
+  const L = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const rxA = new RegExp(
+    `(\\\\item\\s*\\\\textbf\\{${L}\\}\\{:\\s*)([^}]+)(\\})`,
+    "m"
+  );
+  const mA = tex.match(rxA);
+  if (mA) return { style: "A", items: mA[2].trim(), a: mA[1], c: mA[3] };
+
+  const rxB = new RegExp(
+    `(\\\\item\\s*\\\\textbf\\{${L}\\}:\\s*)([^\\n\\\\]+)`,
+    "m"
+  );
+  const mB = tex.match(rxB);
+  if (mB) return { style: "B", items: mB[2].trim(), a: mB[1] };
+
+  return null;
 }
 
 function replaceSkillLine(tex, label, csv) {
-    const rx = new RegExp(`(\\\\item\\s*\\\\textbf\\{${label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\}\\{:\\s)([^}]+)(\\})`, "m");
-    return tex.replace(rx, (f, a, _b, c) => {
-        const items = csv.split(",").map(s => s.trim()).filter(Boolean);
-        const deduped = [...new Set(items.map(x => x.toLowerCase()))].map(lc => items.find(x => x.toLowerCase() === lc));
-        return a + deduped.join(", ") + c;
-    });
-}
+  const L = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const items = csv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const deduped = [...new Set(items.map((x) => x.toLowerCase()))].map((lc) =>
+    items.find((x) => x.toLowerCase() === lc)
+  );
+  const joined = deduped.join(", ");
 
-const cleanName = s => String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim();
-
-function reconcileBulletCounts(rawOps, sectionMap) {
-    return (rawOps || []).map(op => {
-        if (op.op !== "replace_bullets") return op;
-        op.section = cleanName(op.section);
-        const sec = sectionMap[op.section.toLowerCase()];
-        if (!sec || !Array.isArray(op.bullets)) return op;
-        const want = sec.bullets.length;
-        const got = op.bullets.length;
-        if (got < want) {
-            op.bullets = [...op.bullets, ...sec.bullets.slice(got)];
-        } else if (got > want) {
-            op.bullets = op.bullets.slice(0, want);
-        }
-        return op;
-    });
-}
-// ===== Apply ops from model =====
-function applyOps(tex, ops) {
-    let out = tex;
-    const sectionsCache = allRewriteableSections(out);
-    const secByName = (name) => sectionsCache.find(s => s.name.toLowerCase() === cleanName(name).toLowerCase());
-
-    for (const op of (ops || [])) {
-        try {
-            if (op.op === "replace_bullets") {
-                const sec = secByName(op.section);
-                if (!sec) continue;
-                out = replaceSectionBullets(out, sec.name, op.bullets.map(b => escapeLatex(stripBold(b))));
-            } else if (op.op === "replace_skill_csv") {
-                if (!op.label || !op.csv) continue;
-
-                // START: NEW SANITIZATION STEP
-                // This removes potentially broken LaTeX commands from the AI's response.
-                const sanitizedCsv = op.csv.replace(/\\textbf{/g, '').replace(/}/g, '');
-                out = replaceSkillLine(out, op.label, escapeLatex(sanitizedCsv));
-                // END: NEW SANITIZATION STEP
-            }
-        } catch (e) {
-            console.warn("Failed to apply op", op, e);
-        }
-    }
-    return out;
-}
-
-function replaceSectionBullets(tex, sectionName, newBullets) {
-  const rx = new RegExp(
-    "(\\\\resumeSubheading\\s*\\{\\s*" + sectionName.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&") +
-    "\\s*\\}[^]?\\\\begin\\{itemize\\})([\\s\\S]?)(\\\\end\\{itemize\\})",
+  const rxA = new RegExp(
+    `(\\\\item\\s*\\\\textbf\\{${L}\\}\\{:\\s*)([^}]+)(\\})`,
     "m"
   );
-  return tex.replace(rx, (full, pre, _body, post) => {
-    const rebuilt = "\n  \\item " + newBullets.join("\n  \\item ") + "\n";
-    return pre + rebuilt + post;
-  });
-}
+  if (rxA.test(tex)) {
+    console.log(`[skills] replaced (brace style): ${label}`);
+    return tex.replace(rxA, (_f, a, _b, c) => `${a}${escapeLatex(joined)}${c}`);
+  }
 
-function extractSkillLine(tex,label){ const rx=new RegExp("(\\\\item\\s*\\\\textbf\\{"+label.replace(/[.+?^${}()|[\\]\\\\]/g,'\\$&')+"\\}\\{:\\s)([^}]+)(\\})","m"); const m=tex.match(rx); return m?{items:m[2].trim()}:null; }
-function replaceSkillLine(tex,label,csv){ const rx=new RegExp("(\\\\item\\s*\\\\textbf\\{"+label.replace(/[.+?^${}()|[\\]\\\\]/g,'\\$&')+"\\}\\{:\\s)([^}]+)(\\})","m"); return tex.replace(rx,(f,a,_b,c)=>{
-  const items = csv.split(",").map(s=>s.trim());
-  const dedup = [...new Set(items.map(x=>x.toLowerCase()))]
-                  .map(lc => items.find(x=>x.toLowerCase()===lc));
-  return a + dedup.join(", ") + c;
-}); }
-// helper inside geminiPlan (add above the return)
-function appendSkillsCsv(tex, label, newItems) {
-  const line = extractSkillLine(tex, label);
-  if (!line) return tex;
-
-  const have = line.items.split(",").map(s => s.trim());
-  const added = newItems.filter(x =>
-    !have.some(h => h.toLowerCase() === x.toLowerCase())
+  const rxB = new RegExp(
+    `(\\\\item\\s*\\\\textbf\\{${L}\\}:\\s*)([^\\n\\\\]+)`,
+    "m"
   );
-  if (!added.length) return tex;
+  if (rxB.test(tex)) {
+    console.log(`[skills] replaced (colon style): ${label}`);
+    return tex.replace(rxB, (_f, a, _b) => `${a}${escapeLatex(joined)}`);
+  }
 
-  const csv = [...have, ...added].join(", ");
-  return replaceSkillLine(tex, label, escapeLatex(csv));
+  return tex.replace(
+    /\\resumeSubHeadingListStart([\s\S]*?)(?=\\resumeSubHeadingListEnd)/,
+    (full, body) =>
+      full.replace(
+        body,
+        `\n\\item \\textbf{${label}}: ${escapeLatex(joined)}\\vspace{-5pt}\n` + body
+      )
+  );
 }
 
+const cleanName = (s) => String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim();
 
-function reconcileBulletCounts(rawOps, sectionMap) {
-  return rawOps.map(op => {
-    if (op.op !== "replace_bullets") return op;
-    op.section = cleanName(op.section);          // ← normalise once
-    const sec  = sectionMap[op.section.toLowerCase()];
-    if (!sec || !Array.isArray(op.bullets)) return op;
+function fixCommonLatexBugs(tex) {
+  let t = tex;
 
-    const want = sec.bullets.length;
-    const got  = op.bullets.length;
+  t = t.replace(/\\\\textbf\{/g, "\\textbf{");
 
-    if (got < want) {                    // pad with originals
-      op.bullets = [
-        ...op.bullets,
-        ...sec.bullets.slice(got)
-      ];
-    } else if (got > want) {             // truncate extras
-      op.bullets = op.bullets.slice(0, want);
-    }
-    return op;
-  });
+  t = t.replace(
+    /(\\item\s*)\\textbf\{([^}]+)\}\s*\{\s*:\s*([^\n]*?)\s*\}(\s*\\vspace\{[^}]+\})?/g,
+    (_m, item, label, body, vspace = "") =>
+      `${item}\\textbf{${label}}: ${body}${vspace ? " " + vspace : ""}`
+  );
+
+  t = t.replace(/\\vspace\{([\d.]+)\s+pt\}/g, (_m, num) => `\\vspace{${num}pt}`);
+
+  t = t.replace(/}\s*(?=\\vspace|$)/g, "}");
+
+  return t;
 }
 
-        // instead of return obj.ops
+function splitIntoCandidateBullets(s) {
+  const text = String(s || "");
+  if (!text) return [""];
+  const parts = text
+    .split(/\n(?=(?:[-–—•]|\d+\.)\s+)|(?<=;)\s+(?=[A-Z(])|(?:\s*\\item\s+)/g)
+    .map(x => x.trim());
+  return parts.length > 1 ? parts : [text.trim()];
+}
 
-// ===== Apply ops from model =====
-function applyOps(tex, ops, sectionsCache) {
+function extractMetrics(s) {
+  const m = String(s || "").match(/\b(?:\d{1,3}(?:,\d{3})*|\d+)(?:\s*(?:%|x|X|months?|years?|yrs?|sprints?|releases?|users?|requests?|ms|s|sec|mins?|hours?|days?|K|M|B|\$|USD))?\b/g);
+  return m ? Array.from(new Set(m.map(x => x.trim()))) : [];
+}
+
+function ensureMetricsPreserved(originalBullet, newBullet) {
+  if (!ENFORCE_METRIC_VISIBILITY) return newBullet;
+  const orig = extractMetrics(originalBullet);
+  if (!orig.length) return newBullet;
+  const hasAll = orig.every(tok => new RegExp(`\\b${tok.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`).test(newBullet));
+  if (hasAll) return newBullet;
+  return newBullet;
+}
+
+function normalizeAIBulletsForSection(originalBulletsLive, aiBulletsRaw, format = GEMINI_BULLET_FORMAT) {
+  let flat = [];
+  for (const b of aiBulletsRaw || []) {
+    const pieces = splitIntoCandidateBullets(b);
+    flat.push(...pieces);
+  }
+
+  const want = originalBulletsLive.length;
+  if (flat.length < want) {
+    flat = [...flat, ...Array.from({ length: want - flat.length }, () => "")];
+  } else if (flat.length > want) {
+    flat = flat.slice(0, want);
+  }
+
+  flat = flat.map((s, i) => (String(s).trim() === "" ? originalBulletsLive[i] : s));
+  flat = flat.map((nb, idx) => ensureMetricsPreserved(originalBulletsLive[idx] || "", nb));
+
+  if (format === "LATEX") {
+    return flat.map(s =>
+      String(s || "")
+        .replace(/\s*\(\d+\s+words?\)\s*$/i, "")
+        .replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "")
+        .replace(/\s{2,}/g, " ")
+        .trim()
+    );
+  }
+  return flat.map(cleanBullet);
+}
+
+function splitMergedBulletText(s) {
+  const t = String(s || "").trim();
+  if (!t) return [""];
+  const parts = t
+    .split(/\s*(?:\\item\s+)|\n(?=(?:[-–—•]|\d+\.)\s+)/g)
+    .map(x => x.trim());
+  return parts.length ? parts : [t];
+}
+
+function applyOps(tex, ops) {
   let out = tex;
-  const secByName = (name) => {
-    name = cleanName(name);
-  return (sectionsCache || findSubsections(out))
-           .find(s => s.name.toLowerCase() === name.toLowerCase());
-};
-  for (const op of (ops || [])) {
+  const sectionsCache = allRewriteableSections(out);
+
+  const sectionMap = Object.fromEntries(
+    sectionsCache.map((s) => [s.name.toLowerCase(), s])
+  );
+  const sectionNormMap = Object.fromEntries(
+    sectionsCache.map((s) => [normalizeTitle(s.name), s])
+  );
+
+  for (const op of ops || []) {
     try {
       if (op.op === "replace_bullets") {
-        const sec = secByName(op.section); if (!sec) continue;
-        if (!Array.isArray(op.bullets) || op.bullets.length !== sec.bullets.length) continue;
-        out = replaceSectionBullets(
-          out,
-          sec.name,
-          op.bullets.map(b => escapeLatex(stripBold(b)))
-        );
-      } else if (op.op === "add_bullet") {
-        const sec = secByName(op.section); if (!sec || !op.bullet) continue;
-        const rx = new RegExp("(\\\\resumeSubheading\\s*\\{\\s*" + sec.name.replace(/[.+?^${}()|[\\]\\\\]/g,'\\$&') + "\\s\\}[^]?\\\\begin\\{itemize\\})([\\s\\S]?)(\\\\end\\{itemize\\})","m");
-        out = out.replace(
-          rx,
-          (full, pre, body, post) =>
-            `${pre}${body}  \\item ${escapeLatex(stripBold(op.bullet))}\n${post}`
-        );
-      } else if (op.op === "replace_skill_csv") {
-        if (!op.label || typeof op.csv !== "string") continue;
-        const existing = extractSkillLine(out, op.label); if (!existing) continue;
-        const beforeCount = existing.items.split(",").length, afterCount = op.csv.split(",").length;
-        // if (beforeCount !== afterCount) continue;
-        out = replaceSkillLine(out, op.label, escapeLatex(op.csv));
-      } else if (op.op === "replace_text") {
-        if (op.find && typeof op.replace === "string") {
-          const rgx = new RegExp(op.find, "m"); out = out.replace(rgx, escapeLatex(op.replace));
+        const sectionName = cleanName(op.section || "");
+        let sec = sectionMap[sectionName.toLowerCase()];
+        if (!sec) sec = sectionNormMap[normalizeTitle(sectionName)];
+        if (!sec || !Array.isArray(op.bullets)) {
+          console.warn("Skipping op: section not found or bullets missing.", op);
+          continue;
         }
+
+        const liveView = getSectionBodyAndCount(out, sec.name);
+        const wantCount = liveView?.wantCount ?? sec.bullets.length;
+
+        const liveOriginals = getOriginalBulletsFromSection(out, sec.name);
+        const originals = liveOriginals.length ? liveOriginals : (sec.bullets || []);
+        const want = originals.length || wantCount;
+
+        const normalized = normalizeAIBulletsForSection(originals, op.bullets, GEMINI_BULLET_FORMAT);
+
+        let finalBullets =
+          normalized.length === want
+            ? normalized
+            : (normalized.length > want
+                ? normalized.slice(0, want)
+                : [...normalized, ...originals.slice(normalized.length, want)]);
+
+        if (finalBullets.length !== want) {
+          console.warn(`[guard] Bullet count mismatch resolved for section "${sec.name}". want=${want}, got=${finalBullets.length}`);
+          finalBullets = finalBullets.slice(0, want);
+          if (finalBullets.length < want) {
+            finalBullets = [...finalBullets, ...originals.slice(finalBullets.length, want)];
+          }
+        }
+
+        out = replaceSectionBullets(out, sec.name, finalBullets);
+      } else if (op.op === "replace_skill_csv") {
+        if (!op.label || !op.csv) continue;
+        const sanitizedCsv = op.csv.replace(/\\textbf\{/g, "").replace(/}/g, "");
+        out = replaceSkillLine(out, op.label, escapeLatex(sanitizedCsv));
       }
-    } catch (e) { console.warn("Failed to apply op", op, e); }
-  } return out;
-}
-// NEW – replace firstTwoExperience()
-function allExperienceSections(sections) {
-  return sections.filter(s =>
-    /software|engineer|intern|developer/i.test(s.name)
-  );
-}
-function enforceBulletPolicy(originalSecs, newSecs, important) {
-  const must = new Set(important.map(w => w.toLowerCase().trim()).filter(Boolean));
-
-  const ok = (orig, rew) => {
-    const oLen = orig.split(/\s+/).filter(Boolean).length;
-    const rLen = rew.split(/\s+/).filter(Boolean).length;
-    console.log(`Bullet lengths: original=${oLen}, rewritten=${rLen}`);
-    if (rLen < oLen - 1 || rLen - oLen > 4) return false;          // NEW window
-
-    let hits = 0;
-    for (const w of rew.toLowerCase().split(/\s+/))
-      if (must.has(w) && ++hits >= 2) break;
-    return hits >= 2;
-  };
-
-  for (let s = 0; s < originalSecs.length; s++) {
-    const oBullets = originalSecs[s].bullets;
-    const nBullets = newSecs[s].bullets;
-    for (let i = 0; i < oBullets.length; i++)
-      if (!ok(oBullets[i], nBullets[i])) nBullets[i] = oBullets[i]; // revert
+    } catch (e) {
+      console.warn("Failed to apply op", op, e);
+    }
   }
+  return out;
 }
-// ===== PDF Compilation & Final Utilities =====
+
+// ────────────────────────── PDF Compilation Utils ──────────────────────────
+
 async function compileToPdf(texSource, clsContent = "") {
-    const fd = new FormData();
+  const fd = new FormData();
 
-    // Add the main .tex file
-    fd.append("filename[]", "document.tex");
-    fd.append("filecontents[]", new Blob([texSource], { type: "text/plain" }));
+  fd.append("filename[]", "document.tex");
+  fd.append("filecontents[]", new Blob([texSource], { type: "text/plain" }));
 
-    // If a .cls file's content is provided, add it to the request
-    if (clsContent) {
-        // This filename MUST match the one in your \documentclass{...} command
-        fd.append("filename[]", "fed-res.cls");
-        fd.append("filecontents[]", new Blob([clsContent], { type: "text/plain" }));
-    }
+  if (clsContent) {
+    fd.append("filename[]", "fed-res.cls");
+    fd.append("filecontents[]", new Blob([clsContent], { type: "text/plain" }));
+  }
 
-    fd.append("engine", "pdflatex");
-    fd.append("return", "pdf");
+  fd.append("engine", "pdflatex");
+  fd.append("return", "pdf");
 
-    let res = await fetch("https://texlive.net/cgi-bin/latexcgi", { method: "POST", body: fd });
+  let res = await fetch("https://texlive.net/cgi-bin/latexcgi", {
+    method: "POST",
+    body: fd,
+  });
 
-    if (res.status === 301 || res.status === 302) {
-        const loc = res.headers.get("location");
-        if (!loc) throw new Error("Redirect without Location header");
-        res = await fetch(new URL(loc, "https://texlive.net").href);
-    }
+  if (res.status === 301 || res.status === 302) {
+    const loc = res.headers.get("location");
+    if (!loc) throw new Error("Redirect without Location header");
+    res = await fetch(new URL(loc, "https://texlive.net").href);
+  }
 
-    const buf = await res.arrayBuffer();
-    const header = new TextDecoder("ascii").decode(new Uint8Array(buf, 0, 4));
-    if (header !== "%PDF") {
-        const log = new TextDecoder().decode(new Uint8Array(buf));
-        console.error("FULL LaTeX log ↓↓↓\n" + log);
-        throw new Error("LaTeX compile failed – see console for full log");
-    }
-    return buf;
+  const buf = await res.arrayBuffer();
+
+  const head = new Uint8Array(buf);
+  const isPdf =
+    head.length >= 4 &&
+    head[0] === 0x25 &&
+    head[1] === 0x50 &&
+    head[2] === 0x44 &&
+    head[3] === 0x46;
+
+  if (!isPdf) {
+    const log = new TextDecoder().decode(head);
+    console.error("FULL LaTeX log ↓↓↓\n" + log);
+
+    const markers = [
+      "! ",
+      "Undefined control sequence",
+      "Missing $ inserted",
+      "Emergency stop",
+      "Fatal error occurred",
+    ];
+    const firstIdx =
+      markers
+        .map((m) => log.indexOf(m))
+        .filter((i) => i >= 0)
+        .sort((a, b) => a - b)[0] ?? 0;
+
+    const snippet = log.slice(firstIdx, Math.min(firstIdx + 1500, log.length));
+    throw new Error(
+      "LaTeX compile failed. See console for full log.\n\nERROR SNIPPET:\n" +
+        snippet
+    );
+  }
+
+  return buf;
 }
 
 function arrayBufferToBase64(buf) {
-    const bytes = new Uint8Array(buf);
-    let binary = "";
-    // Avoids "Maximum call stack size exceeded" for large files
-    for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
 }
 
-// ===== Main Message Handler (Completely Replaced) =====
+// ─────────────────────────── Main message handler ───────────────────────────
+
+// IMPORTANT: Exactly one listener; no duplicates.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    (async () => {
-        if (msg.type !== "PROCESS_JD_PIPELINE") return;
+  (async () => {
+    if (msg.type !== "PROCESS_JD_PIPELINE") return;
 
-        const { jd, prompt, categoryId, selectedProjectIds } = msg.payload || {};
-        const { resumeData: DB } = await chrome.storage.local.get("resumeData");
+    const { jd, company, prompt, categoryId, selectedProjectIds } = msg.payload || {};
+    const { resumeData: DB } = await chrome.storage.local.get("resumeData");
 
-        if (!DB?.apikey) throw new Error("Missing API key in Options.");
-        const category = DB.categories.find(c => c.id === categoryId);
-        if (!category) throw new Error("Selected category not found.");
+    if (!DB?.apikey) throw new Error("Missing API key in Options.");
+    const category = DB.categories.find((c) => c.id === categoryId);
+    if (!category || !category.latex)
+      throw new Error("Selected category not found or has no LaTeX template.");
 
-        // --- 1. DYNAMICALLY BUILD THE LATEX SOURCE ---
-        let latex = category.latex;
-        const selectedProjects = DB.projects.filter(p => selectedProjectIds.includes(p.id));
+    // --- 1) Build LaTeX with dynamic Projects (marker first, fallback to section) ---
+    let latex = category.latex;
+    const selectedProjects = (DB.projects || []).filter((p) =>
+      (selectedProjectIds || []).includes(p.id)
+    );
 
-        const projectLatexStrings = selectedProjects.map(p => {
-            const linkCmd = p.link ? ` \\href{${p.link}}{\\underline{Link}}` : "";
-            const bullets = p.bullets.map(b => `  \\item ${escapeLatex(b)}`).join("\n");
-            return `\\resumeProjectHeading
-  {\\textbf{${escapeLatex(p.name)}}${linkCmd}}{${escapeLatex(p.dates)}}
+    const projectLatexStrings = selectedProjects
+      .map((p) => {
+        const linkCmd = p.link
+          ? ` \\href{\\detokenize{${p.link}}}{\\underline{Link}}`
+          : "";
+        const bullets = (p.bullets || [])
+          .map((b) => `  \\item ${escapeLatex(b)}`)
+          .join("\n");
+        return `\\resumeProjectHeading
+  {\\textbf{${escapeLatex(p.name || "")}}${linkCmd}}{${escapeLatex(
+          p.dates || ""
+        )}}
   \\begin{itemize}[leftmargin=10pt,itemsep=2pt,parsep=0pt,topsep=5pt,partopsep=0pt]
 ${bullets}
   \\end{itemize}
   \\vspace{-10pt}`;
-        }).join("\n");
-        
-        const projectsSectionRegex = /(\\section\{Projects\}[\s\S]*?\\resumeSubHeadingListStart)([\s\S]*?)(\\resumeSubHeadingListEnd)/;
-        if (latex.match(projectsSectionRegex)) {
-            latex = latex.replace(projectsSectionRegex, `$1\n${projectLatexStrings}\n$3`);
-        } else {
-            console.warn("Could not find a '\\section{Projects}' block to replace.");
-        }
+      })
+      .join("\n\\vspace{4pt}\n");
 
-        // --- 2. RUN THE REFINEMENT PIPELINE ---
-        const apikey = DB.apikey;
-        const keywords = Array.isArray(category.keywords) ? category.keywords : [];
-        const { skillsMissing, importantMissing } = await geminiExtractMissing(apikey, jd, keywords);
+    const injectionMarker = "%PROJECTS WILL BE DYNAMICALLY INJECTED HERE";
+    if (latex.includes(injectionMarker)) {
+      latex = latex.replace(injectionMarker, projectLatexStrings);
+    } else {
+      const projectsSectionRegex =
+        /(\\section\{Projects\}[\s\S]*?\\resumeSubHeadingListStart)([\s\S]*?)(\\resumeSubHeadingListEnd)/;
+      if (latex.match(projectsSectionRegex)) {
+        latex = latex.replace(
+          projectsSectionRegex,
+          `$1\n${projectLatexStrings}\n$3`
+        );
+      } else {
+        console.warn(
+          "Could not find a projects injection point (marker or section)."
+        );
+      }
+    }
 
-        // -- Pass 1: Bullet Rewrite --
-        const bulletOps = await geminiPlan(apikey, jd, prompt, latex, { importantMissing });
-        let finalLatex = applyOps(latex, bulletOps);
+   // --- 2) Refinement pipeline ---
+const apikey = DB.apikey;
 
-        // -- Pass 2: Skill Refinement --
-        const skillLabels = ["Programming Languages", "Frameworks and Libraries", "Databases", "Tools and Technologies", "Cloud Platforms and Deployment", "Software Development Practices", "Certifications"];
-        const skills = {};
-        for (const lab of skillLabels) {
-            const line = extractSkillLine(finalLatex, lab);
-            if (line) skills[lab] = line.items;
-        }
-        const skillOps = await geminiRefineSkills(apikey, jd, skills, skillsMissing);
-        finalLatex = applyOps(finalLatex, skillOps);
+// Normalize category keywords (string or array)
+const categoryKeywords = Array.isArray(category.keywords)
+  ? category.keywords
+  : String(category.keywords || "")
+      .split(",")
+      .map(s => s.trim())
+      .filter(Boolean);
 
-        // --- 3. COMPILE FINAL PDF ---
-        const pdfBuf = await compileToPdf(finalLatex, category.clsFileContent);
-        const pdfB64 = arrayBufferToBase64(pdfBuf);
-        sendResponse({ pdfB64, tex: finalLatex });
+// Extract JD gaps using category hints
+const { skillsMissing, importantMissing } = await geminiExtractMissing(
+  apikey,
+  jd,
+  categoryKeywords
+);
+console.log("🔍 Extracted missing skills:", skillsMissing);
+console.log("🔍 Extracted important missing keywords:", importantMissing);
 
-    })().catch(err => {
-        console.error("PIPELINE FAILED:", err);
-        sendResponse({ error: err.message });
-    });
-    return true; // Required for async sendResponse
+// Build targeting lists (JD-first so the model pivots aggressively to the JD)
+const inResumeKeywords = collectResumeSkillKeywords(latex); // from Skills section
+const targetKeywords = Array.from(
+  new Set([
+    ...skillsMissing,        // JD-derived, highest priority
+    ...importantMissing,     // JD-derived high-impact concepts
+    ...categoryKeywords,     // category hints, lowest priority
+  ])
+).filter(Boolean);
+
+// Pass 1: role-aware bullet rewrites (applies to Work Experience + Projects)
+const bulletOps = await geminiPlan(apikey, company, jd, prompt, latex, {
+  targetKeywords,
+  inResumeKeywords,
 });
+let finalLatex = applyOps(latex, bulletOps);
 
 
+    // Pass 2: skills refinement
+    const skillLabels = [
+      "Programming Languages",
+      "Frameworks & Libraries",
+      "Databases",
+      "Tools and Technologies",
+      "Cloud & DevOps",
+      "Development Practices",
+      "Certifications",
+    ];
+    const skills = {};
+    for (const lab of skillLabels) {
+      const line = extractSkillLine(finalLatex, lab);
+      if (line) {
+        skills[lab] = stripLatex(line.items);
+      }
+    }
+    const skillOps = await geminiRefineSkills(apikey, jd, skills, skillsMissing);
+    finalLatex = applyOps(finalLatex, skillOps);
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    (async () => {
-        if (msg.type !== "PROCESS_JD_PIPELINE") return;
+    // Fix common LaTeX pitfalls before compiling
+    finalLatex = fixCommonLatexBugs(finalLatex);
 
-        const { jd, prompt, categoryId, selectedProjectIds } = msg.payload || {};
-        const { resumeData: DB } = await chrome.storage.local.get("resumeData");
-
-        if (!DB?.apikey) throw new Error("Missing API key in Options.");
-        const category = DB.categories.find(c => c.id === categoryId);
-        console.log("DEBUG: Found category object:", category);
-        if (!category || !category.latex) throw new Error("Selected category not found or has no LaTeX template.");
-        console.log("DEBUG: Found category object:", category); // <-- ADD THIS LINE
-
-        // --- 1. DYNAMICALLY BUILD THE LATEX SOURCE ---
-        let latex = category.latex;
-        const selectedProjects = DB.projects.filter(p => selectedProjectIds.includes(p.id));
-
-        const projectLatexStrings = selectedProjects.map(p => {
-            const linkCmd = p.link ? ` \\href{${p.link}}{\\underline{Link}}` : "";
-            const bullets = p.bullets.map(b => `  \\item ${escapeLatex(b)}`).join("\n");
-            return `\\resumeProjectHeading
-  {\\textbf{${escapeLatex(p.name)}}${linkCmd}}{${escapeLatex(p.dates)}}
-  \\begin{itemize}[leftmargin=10pt,itemsep=2pt,parsep=0pt,topsep=5pt,partopsep=0pt]
-${bullets}
-  \\end{itemize}
-  \\vspace{-10pt}`;
-        }).join("\n\\vspace{4pt}\n");
-
-        // Use a placeholder comment to inject projects
-        const injectionMarker = "%PROJECTS WILL BE DYNAMICALLY INJECTED HERE";
-        if (latex.includes(injectionMarker)) {
-            latex = latex.replace(injectionMarker, projectLatexStrings);
-        } else {
-            console.warn("Could not find project injection marker. Check your LaTeX template for '%PROJECTS WILL BE DYNAMICALLY INJECTED HERE'");
-        }
-
-        // --- 2. RUN THE REFINEMENT PIPELINE ---
-        const apikey = DB.apikey;
-        const keywords = Array.isArray(category.keywords) ? category.keywords : [];
-        const { skillsMissing, importantMissing } = await geminiExtractMissing(apikey, jd, keywords);
-
-        // -- Pass 1: Bullet Rewrite --
-        const bulletOps = await geminiPlan(apikey, jd, prompt, latex, { importantMissing });
-        let finalLatex = applyOps(latex, bulletOps);
-
-        // -- Pass 2: Skill Refinement --
-        const skillLabels = ["Programming Languages", "Frameworks and Libraries", "Databases", "Tools and Technologies", "Cloud Platforms and Deployment", "Software Development Practices", "Certifications"];
-        const skills = {};
-        for (const lab of skillLabels) {
-            const line = extractSkillLine(finalLatex, lab);
-            if (line) skills[lab] = line.items;
-        }
-        const skillOps = await geminiRefineSkills(apikey, jd, skills, skillsMissing);
-        finalLatex = applyOps(finalLatex, skillOps);
-
-        // --- 3. COMPILE FINAL PDF ---
-        const pdfBuf = await compileToPdf(finalLatex, category.clsFileContent);
-        console.log("DEBUG: CLS content being sent to compiler:", category.clsFileContent); // <-- ADD THIS LINE
-        const pdfB64 = arrayBufferToBase64(pdfBuf);
-        sendResponse({ pdfB64, tex: finalLatex });
-
-    })().catch(err => {
-        console.error("PIPELINE FAILED:", err);
-        sendResponse({ error: err.message });
+    // --- 3) Compile & return ---
+    console.log("--- FINAL LATEX SOURCE TO BE COMPILED ---\n\n", finalLatex);
+    const pdfBuf = await compileToPdf(finalLatex, category.clsFileContent);
+    const pdfB64 = arrayBufferToBase64(pdfBuf);
+    sendResponse({ pdfB64, tex: finalLatex });
+  })()
+    .catch((err) => {
+      console.error("PIPELINE FAILED:", err);
+      sendResponse({ error: err.message });
     });
-    return true; // Required for async sendResponse
+
+  return true; // keep the message channel open for async sendResponse
 });
-// ── LaTeX guard ──
-// turn “… 35% improvement” → “… 35\% improvement”

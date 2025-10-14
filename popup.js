@@ -72,6 +72,7 @@
                     type: "PROCESS_JD_PIPELINE",
                     payload: {
                         jd,
+                        company,
                         prompt: $("prompt").value.trim(),
                         categoryId,
                         selectedProjectIds
