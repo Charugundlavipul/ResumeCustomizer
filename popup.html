@@ -4,20 +4,38 @@
   <meta charset="utf-8" />
   <title>ATS Resume Enhancer</title>
   <style>
-    :root { --bg:#0b1b2b; --card:#13273b; --accent:#2eaadc; --muted:#a7c2d9; --text:#eaf6ff; --radius:14px; }
-    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); width: 420px;}
-    .wrap { padding: 16px; }
-    h3 { margin: 0 0 8px; }
-    p.muted { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
-    .card { background: var(--card); border-radius: var(--radius); padding: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.2); }
-    label { font-size: 12px; color: var(--muted); display: block; margin: 12px 0 6px; }
-    input, textarea, select { width: 100%; box-sizing:border-box; border: 1px solid #0f2235; background: #0f2235; color: var(--text); padding: 10px; border-radius: 10px; font-family: inherit; font-size: 13px; }
-    button { border: none; background: var(--accent); color: #05202b; padding: 10px 14px; border-radius: 10px; font-weight: 600; cursor: pointer; }
-    button.ghost { background:transparent; border:1px solid rgba(255,255,255,.15); color:var(--text); }
-    a.link { display: none; padding: 10px 14px; border-radius: 10px; background: #0f2235; color: var(--text); text-decoration: none; border: 1px solid rgba(255,255,255,.1); }
-    .status { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
-    #projectSelection label { display: block; margin: 4px 0; font-size: 13px; color: var(--text); }
-  </style>
+  :root { --bg:#0b1b2b; --card:#13273b; --accent:#2eaadc; --muted:#a7c2d9; --text:#eaf6ff; --radius:14px; }
+  body { font-family: Inter, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); width: 420px;}
+  .wrap { padding: 16px; }
+  h3 { margin: 0 0 8px; }
+  p.muted { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+  .card { background: var(--card); border-radius: var(--radius); padding: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.2); }
+  label { font-size: 12px; color: var(--muted); display: block; margin: 12px 0 6px; }
+  input, textarea, select {
+    width: 100%;
+    box-sizing:border-box;
+    border: 1px solid #0f2235;
+    background: #0f2235;
+    color: var(--text);
+    padding: 10px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  /* Bigger job description box */
+  #jd {
+    min-height: 180px;
+    resize: vertical;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  button { border: none; background: var(--accent); color: #05202b; padding: 10px 14px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+  button.ghost { background:transparent; border:1px solid rgba(255,255,255,.15); color:var(--text); }
+  a.link { display: none; padding: 10px 14px; border-radius: 10px; background: #0f2235; color: var(--text); text-decoration: none; border: 1px solid rgba(255,255,255,.1); }
+  .status { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
+  #projectSelection label { display: block; margin: 4px 0; font-size: 13px; color: var(--text); }
+</style>
+
 </head>
 <body>
   <div class="wrap">

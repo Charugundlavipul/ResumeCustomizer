@@ -334,8 +334,8 @@ async function geminiPlan(
     inResumeKeywords = [],
   } = {}
 ) {
-  const MIN_WORDS = 32;
-  const MAX_WORDS = 38;
+  const MIN_WORDS = 34;
+  const MAX_WORDS = 36;
 
   const formatHint =
     GEMINI_BULLET_FORMAT === "LATEX"
@@ -347,32 +347,61 @@ async function geminiPlan(
 
   // ───────── JD-ONLY LEXICON + DEVIATION ALLOWED (TRUTHFUL) ─────────
   const refinedPolicy = `
-As an AI resume editor, your task is to rewrite resume bullets, making them strictly align with the provided Job Description (JD).
+As an AI resume editor, your task is to rewrite resume bulletsRewrite each resume bullet so it precisely maps to the provided Job Description (JD) while preserving the original meaning and facts.
 
-Core Directives
-Prioritize the JD: The rewritten bullets must use the technologies, keywords, and responsibilities from the JD. You are required to change the original bullet's meaning and tech stack to match the JD's focus if it lacks behind.
+Non-Negotiables
 
-Never include the word ${company} and if there are any company specific points like their inhouse tools dont use that in any bullet point.
+JD First: Mirror the JD’s responsibilities, terminology, and tech stack; prefer the most emphasized tools/frameworks in the JD when multiple are listed.
 
-Maintain Structure:
+STRICT: No ${company}: Do not include the word ${company} and omit any employer-specific/internal tools.
 
-Keep the exact number of bullets per section and preserve their original order.
+Structure Lock: Keep the exact number of bullets per section and preserve their order.
 
-Each bullet must be between ${MIN_WORDS} and ${MAX_WORDS} words.
+Length Gate: Every bullet must be between ${MIN_WORDS} and ${MAX_WORDS} words.
 
-Preserve Facts:
+Fact Integrity: Keep all facts; if a bullet contains metrics, create an additional bullet that integrates the metric and aligns it to the JD.
 
-If you find metrics in any bullet just create another bullet matching the metric and the jd requirements and include that metric in that bullet point.
+Quality Bar: Only replace a bullet if the new version is more optimized; otherwise, retain the original.
 
-generated bullet should be always more optimized than original bullet or else keep the original one
+Tool Emphasis: When the JD lists multiple technologies, prioritize the one most stressed in the JD.
 
-Each generated bullet should be perfectly aligned with jd, don't care about original meaning treat the original one as a mere placeholder.
+Uniqueness Constraint: Do not repeat the same skill/technology across bullets; if a tool cannot be woven in without duplication, keep the existing bullet.
 
-If jd has multiple technologies or languages focus more on the one which was given highest importance of all like if you see multiple libraries or frameworks mentioned in jd then focus on the one which is mentioned the most or given highest importance.
+Global Repetition Cap: Ensure tools/technologies do not appear more than twice across the entire rewritten set.
 
-Writing Style: Write each bullet as a single, dense sentence that starts with a strong action verb. Avoid filler words (e.g., "successfully," "various").
-Every point should be construcuted with extreme precision, no fluff if you want to explain something like include micro details like versions of technologies etc properly mention details and do not generalize.
-Make sure the tools are not repeting(not more than 2 times) in the final overall answer.
+Style Rules
+
+One sentence per bullet, dense and information-rich.
+
+Start with a strong action verb (e.g., Architected, Automated, Orchestrated, Optimized).
+
+No filler (avoid terms like “successfully,” “various,” “multiple”).
+
+Be exacting: Specify versions and configurations where relevant (e.g., “React 18,” “Python 3.11,” “PostgreSQL 14,” “Kubernetes 1.30”).
+
+No generalities: Prefer concrete scope, scale, and impact details consistent with the source bullet.
+
+Transformation Rules
+
+Map to JD: Replace original terminology with JD vocabulary while preserving the underlying achievement.
+
+Integrate Metrics: If any metric exists, add a separate bullet tying the metric to JD outcomes (performance, reliability, cost, security, UX, etc.).
+
+Optimize, Don’t Inflate: Tighten phrasing, clarify outcomes, and align tools—never invent facts.
+
+Avoid Duplication: Enforce the no-repeat rule for skills/tech across all bullets; if conflict arises, keep the original bullet unmodified.
+
+Final Pass: Confirm all bullets meet word count, order, JD alignment, fact preservation, and repetition limits.
+
+Output Requirements
+
+Return the bullets in the original section order and count.
+
+Each bullet: ${MIN_WORDS}–${MAX_WORDS} words, one sentence, action-led, JD-aligned, and fact-accurate.
+
+Include extra metric bullets only when the source bullet contains metrics, ensuring they also follow all rules above.
+
+Never ever end a sentence with fillers like ""aligning with" etc
 `;
 
   const instructionBlock = userPrompt?.trim()
