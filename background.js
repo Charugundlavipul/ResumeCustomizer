@@ -4,7 +4,7 @@
 try {
   importScripts(chrome.runtime.getURL("libs/jszip.min.js")); // exposes global JSZip
 } catch (e) {
-  console.warn("JSZip failed to load; zip compilation will be skipped.", e);
+  console.warn("JSZip failed to load; zip compilation will be skipped.", e);   
 }
 
 function labelToLatexPattern(label) {
