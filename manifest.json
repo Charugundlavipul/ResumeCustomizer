@@ -3,9 +3,17 @@
   "name": "ATS-Optimized Resume Enhancer (Pipeline + Prompt)",
   "version": "2.2.0",
   "description": "Safely updates bullets & skills across a LaTeX resume to match a JD. Minimal edits, ATS-safe. Supports a custom 'Rewrite Prompt' and supporting files.",
-  "action": { "default_popup": "popup.html" },
+  "action": {
+    "default_title": "ATS Resume Enhancer"
+  },
   "options_page": "options.html",
-  "permissions": ["storage", "downloads"],
+  "permissions": [
+    "storage",
+    "downloads",
+    "scripting",
+    "tabs",
+    "activeTab"
+  ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",
     "https://latexonline.cc/*",

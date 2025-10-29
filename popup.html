@@ -7,7 +7,26 @@
   :root { --bg:#0b1b2b; --card:#13273b; --accent:#2eaadc; --muted:#a7c2d9; --text:#eaf6ff; --radius:14px; }
   body { font-family: Inter, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); width: 420px;}
   .wrap { padding: 16px; }
-  h3 { margin: 0 0 8px; }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  h3 { margin: 0; }
+  .minimize-btn {
+    border: none;
+    background: rgba(255,255,255,0.08);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .minimize-btn:hover {
+    background: rgba(255,255,255,0.15);
+  }
   p.muted { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
   .card { background: var(--card); border-radius: var(--radius); padding: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.2); }
   label { font-size: 12px; color: var(--muted); display: block; margin: 12px 0 6px; }
@@ -33,36 +52,52 @@
   button.ghost { background:transparent; border:1px solid rgba(255,255,255,.15); color:var(--text); }
   a.link { display: none; padding: 10px 14px; border-radius: 10px; background: #0f2235; color: var(--text); text-decoration: none; border: 1px solid rgba(255,255,255,.1); }
   .status { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
+  .scroll-area { padding: 5px; max-height: 150px; overflow-y: auto; }
+  .button-row { display:flex; gap:8px; margin-top:10px; align-items:center; }
+  .button-row .ghost { margin-left:auto; }
+  .required { color:#ffb3b3; }
+  body[data-minimized="1"] { width: 240px; }
+  body[data-minimized="1"] .form-fields { display: none; }
+  body[data-minimized="1"] .button-row { margin-top:0; justify-content: space-between; }
+  body[data-minimized="1"] .button-row .ghost { display: none; }
+  body[data-minimized="1"] #generate { display: none; }
+  body[data-minimized="1"] #downloadPdf { display: inline-flex; }
+  body[data-minimized="1"] .status { margin-top: 4px; min-height: auto; }
   #projectSelection label { display: block; margin: 4px 0; font-size: 13px; color: var(--text); }
 </style>
 
 </head>
 <body>
   <div class="wrap">
-    <h3>ATS Resume Enhancer</h3>
+    <div class="header">
+      <h3>ATS Resume Enhancer</h3>
+      <button id="minimizePanel" class="minimize-btn" type="button" title="Minimize to status view">Minimize</button>
+    </div>
     <p class="muted">Select a category and projects to build your resume.</p>
     <div class="card">
-      <label for="categorySelect">1. Select a Resume Category</label>
-      <select id="categorySelect"><option>Loading...</option></select>
+      <div class="form-fields">
+        <label for="categorySelect">1. Select a Resume Category</label>
+        <select id="categorySelect"><option>Loading...</option></select>
 
-      <label for="projectSelection">2. Select Projects to Include</label>
-      <div id="projectSelection" style="padding: 5px; max-height: 150px; overflow-y: auto;">
-        <p class="muted">Select a category first.</p>
+        <label for="projectSelection">2. Select Projects to Include</label>
+        <div id="projectSelection" class="scroll-area">
+          <p class="muted">Select a category first.</p>
+        </div>
+
+        <label for="company">3. Company Name <span class="required">*</span></label>
+        <input id="company" type="text" placeholder="e.g. Stripe" required>
+        
+        <label for="jd">4. Job Description</label>
+        <textarea id="jd" placeholder="Paste the full JD..."></textarea>
+
+        <label for="prompt">5. Rewrite Prompt (optional)</label>
+        <textarea id="prompt" placeholder="e.g., Emphasize my cloud experience..."></textarea>
       </div>
 
-      <label for="company">3. Company Name <span style="color:#ffb3b3">*</span></label>
-      <input id="company" type="text" placeholder="e.g. Stripe" required>
-      
-      <label for="jd">4. Job Description</label>
-      <textarea id="jd" placeholder="Paste the full JD…"></textarea>
-
-      <label for="prompt">5. Rewrite Prompt (optional)</label>
-      <textarea id="prompt" placeholder="e.g., Emphasize my cloud experience..."></textarea>
-      
-      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+      <div class="button-row">
         <button id="generate" type="button">Generate</button>
         <a id="downloadPdf" class="link" download="vipul_charugundla.pdf">Download PDF</a>
-        <button id="openSettings" class="ghost" type="button" style="margin-left:auto;">Settings</button>
+        <button id="openSettings" class="ghost" type="button">Settings</button>
       </div>
       <div id="status" class="status"></div>
     </div>

@@ -1,4 +1,4 @@
-// MV3 background service worker — cleaned, hardened, and drop-in ready
+﻿// MV3 background service worker â€” cleaned, hardened, and drop-in ready
 
 // === Optional dependency (safe to fail) ===
 try {
@@ -10,6 +10,7 @@ try {
 function labelToLatexPattern(label) {
   // 1) Escape regex metachars
   let L = String(label || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
   // 2) Handle LaTeX-escaped specials inside \textbf{...}
   // Make "&" match either "&" or "\&" (tolerant), then escape other LaTeX specials.
   L = L
@@ -24,9 +25,9 @@ function labelToLatexPattern(label) {
 }
 
 
-/** ───────────────────────────────── CONFIG ─────────────────────────────────
+/** â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CONFIG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * How should the model return bullets?
- * - "TEXT": model returns plain text (no LaTeX). We escape safely on-device.  ← recommended
+ * - "TEXT": model returns plain text (no LaTeX). We escape safely on-device.  â† recommended
  * - "LATEX": model returns already LaTeX-safe text (no \item or environments), we trust it.
  */
 const GEMINI_BULLET_FORMAT = "TEXT"; // "TEXT" | "LATEX"
@@ -34,12 +35,61 @@ const GEMINI_BULLET_FORMAT = "TEXT"; // "TEXT" | "LATEX"
 /** Strictly keep bullet counts; no visible suffix, no metric appenders */
 const ENFORCE_METRIC_VISIBILITY = false; // never append "(retained metrics: ...)" text
 
-// ───────────────────────────────── Utilities ─────────────────────────────────
+const POPUP_STATE_KEY = "popupState";
+
+async function getActiveTab() {
+  if (!chrome?.tabs?.query) return null;
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return tabs?.[0] || null;
+}
+
+async function injectOverlayIntoActiveTab() {
+  if (!chrome?.scripting?.executeScript) {
+    throw new Error("Missing scripting permission for overlay inject.");
+  }
+
+  const tab = await getActiveTab();
+  if (!tab?.id || !tab?.url) {
+    throw new Error("No active tab available for overlay.");
+  }
+
+  if (/^(chrome|edge|about|devtools):/i.test(tab.url)) {
+    throw new Error("Cannot show overlay on this page.");
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ["overlay.js"],
+  });
+
+  return { tabId: tab.id };
+}
+
+async function mergePopupState(partial, { token, overwrite = false } = {}) {
+  try {
+    const stored =
+      (await chrome.storage.local.get(POPUP_STATE_KEY))[POPUP_STATE_KEY] || {};
+
+    if (token && stored.generationToken && stored.generationToken !== token) {
+      return;
+    }
+
+    const next = overwrite
+      ? { ...partial }
+      : { ...stored, ...partial };
+
+    await chrome.storage.local.set({ [POPUP_STATE_KEY]: next });
+  } catch (err) {
+    console.warn("Failed to merge popup state", err);
+  }
+}
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Only strip stray *markdown* bold, not LaTeX commands.
 const stripBold = (s) => String(s || "").replace(/\*(\S(?:.*?\S)?)\*/g, "$1");
 
-// ── NEW: robust bullet extractor used everywhere (prevents last-item drop)
+// â”€â”€ NEW: robust bullet extractor used everywhere (prevents last-item drop)
 // Matches \item bodies until the next \item on a new line OR end-of-body.
 function extractBulletsFromItemizeBody(body) {
   const src = String(body || "").replace(/\r\n/g, "\n");
@@ -101,7 +151,7 @@ const escapeLatex = escapeLatexSafe;
 
 const cleanBullet = (s) =>
   escapeLatex(stripBold(String(s || "")))
-    .replace(/\s*\(\d+\s+words?\)\s*$/i, "")
+    .replace(/\s*\(\d+\s+(?:words?|chars?|characters?)\)\s*$/i, "")
     .replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -113,59 +163,259 @@ const stripLatex = (s) => {
 };
 
 // Safer JSON un-fencer for Gemini responses
+function extractBalancedJsonSegment(src) {
+  if (!src) return null;
+  const txt = String(src);
+  const start = txt.search(/[{\[]/);
+  if (start === -1) return null;
+
+  const openers = {
+    "{": "}",
+    "[": "]",
+  };
+  const closers = new Set(Object.values(openers));
+
+  const stack = [];
+  let inString = false;
+  let escaping = false;
+
+  for (let i = start; i < txt.length; i++) {
+    const ch = txt[i];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (openers[ch]) {
+      stack.push(openers[ch]);
+      continue;
+    }
+
+    if (closers.has(ch)) {
+      if (!stack.length || stack[stack.length - 1] !== ch) {
+        // Mismatched closer; bail out
+        return null;
+      }
+      stack.pop();
+      if (!stack.length) {
+        return txt.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
 function safeJsonFromGemini(raw) {
   if (!raw) return null;
   let txt = String(raw).trim();
 
-  // Strip code fences if present
+  // Strip fenced code if present
   if (txt.startsWith("```")) {
     txt = txt.replace(/^(?:```(?:json)?\s*)|(?:\s*```)$/g, "").trim();
   }
 
-  // Seek the first {...} or [...] blob if the model wrapped text around it
+  // Normalize BOM
+  txt = txt.replace(/^\uFEFF/, "");
+
+  const attemptParse = (s) => {
+    if (!s) return null;
+    try { return JSON.parse(s); } catch { return null; }
+  };
+
+  // Fast path: the whole thing is already clean JSON
+  const direct = attemptParse(txt);
+  if (direct) return direct;
+
+  // If the model wrapped text around JSON, grab the first fully balanced JSON segment
+  const balanced = extractBalancedJsonSegment(txt);
+  if (balanced) {
+    const p = attemptParse(
+      // make JSON-valid escapes: turn LaTeX-like \% into \\%
+      balanced.replace(/\\(?!["\\/bfnrtu])/g, "\\\\")
+    );
+    if (p) return p;
+  }
+
+  // If not found, try to heuristically slice from the first { or [
   if (!/^[{\[]/.test(txt)) {
     const first = txt.search(/[{\[]/);
     const lastObj = txt.lastIndexOf("}");
     const lastArr = txt.lastIndexOf("]");
     const last = Math.max(lastObj, lastArr);
-    if (first === -1 || last === -1 || last <= first) return null;
-    txt = txt.slice(first, last + 1);
+    if (first !== -1 && last !== -1 && last > first) {
+      const mid = txt.slice(first, last + 1).replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+      const p = attemptParse(mid);
+      if (p) return p;
+    }
   }
 
-  // 🔧 KEY PATCH: make JSON-valid escapes
-  // Any backslash not starting a legal JSON escape becomes a double backslash.
-  // Fixes \% \& \_ \{ \} \$ \# etc that LLMs emit for LaTeX.
-  txt = txt.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
-
-  // Also remove a UTF-8 BOM if present
-  txt = txt.replace(/^\uFEFF/, "");
-
-  try {
-    return JSON.parse(txt);
-  } catch (e) {
-    console.warn("safeJsonFromGemini failed to parse JSON after sanitize:", e, txt);
-    return null;
-  }
+  // Give up
+  console.warn("safeJsonFromGemini: unable to parse:", raw);
+  return null;
 }
 
 
-// Hardened parser wrapper that always returns { ops: [] } on failure
+// Targeted extractor for a valid {"ops":[...]} object inside noisy text.
+function extractOpsObject(raw) {
+  if (!raw) return null;
+  const txt = String(raw);
+  const start = txt.indexOf('{"ops"');
+  if (start === -1) return null;
+
+  let inString = false;
+  let escaping = false;
+  let depth = 0;
+
+  for (let i = start; i < txt.length; i++) {
+    const ch = txt[i];
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        const segment = txt.slice(start, i + 1);
+        try {
+          const sanitized = segment.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+          return JSON.parse(sanitized);
+        } catch (_) {
+          return null;
+        }
+      } else if (depth < 0) {
+        break;
+      }
+    }
+  }
+  return null;
+}
+
+// Targeted extractor for the ops array if the wrapper is corrupted.
+function extractOpsArray(raw) {
+  if (!raw) return null;
+  const txt = String(raw);
+  const m = txt.match(/\"ops\"\s*:\s*/);
+  if (!m) return null;
+  const afterKey = txt.indexOf(m[0]) + m[0].length;
+  const start = txt.indexOf("[", afterKey);
+  if (start === -1) return null;
+
+  const openers = { '{': '}', '[': ']' };
+  const closers = new Set(Object.values(openers));
+  const stack = [']'];
+  let inString = false;
+  let escaping = false;
+
+  for (let i = start + 1; i < txt.length; i++) {
+    const ch = txt[i];
+    if (escaping) { escaping = false; continue; }
+    if (ch === '\\') { escaping = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (openers[ch]) { stack.push(openers[ch]); continue; }
+    if (closers.has(ch)) {
+      const need = stack[stack.length - 1];
+      if (ch !== need) return null; // mismatched
+      stack.pop();
+      if (!stack.length) {
+        const segment = txt.slice(start, i + 1);
+        try {
+          const sanitized = segment.replace(/\\(?![\"\\\/bfnrtu])/g, "\\\\");
+          const arr = JSON.parse(sanitized);
+          return Array.isArray(arr) ? arr : null;
+        } catch (_) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Bruteforce fallback: trim trailing garbage until {"ops": ...} parses.
+function bruteForceOpsObject(raw) {
+  if (!raw) return null;
+  const txt = String(raw);
+  const start = txt.indexOf('{"ops"');
+  if (start === -1) return null;
+
+  for (let end = txt.length; end > start; end--) {
+    const fragment = txt.slice(start, end);
+    try {
+      const sanitized = fragment.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+      const parsed = JSON.parse(sanitized);
+      if (parsed?.ops && Array.isArray(parsed.ops)) return parsed;
+    } catch (_) {
+      // keep trimming
+    }
+  }
+  return null;
+}
+
 async function robustGeminiParse(resp) {
   const raw = resp?.trim?.() || "";
+
+  // 1) Try direct parse first (fast path)
+  try {
+    const direct = JSON.parse(raw);
+    if (direct?.ops && Array.isArray(direct.ops)) return direct;
+  } catch (_) {}
+
+  // 2) Our sanitizer
   const parsed = safeJsonFromGemini(raw);
   if (parsed?.ops && Array.isArray(parsed.ops)) return parsed;
+  if (Array.isArray(parsed)) return { ops: parsed };
 
-  console.error(
-    "🔴 GEMINI reply could not be parsed into a valid {ops: []} structure ↓↓↓\n" +
-      raw
-  );
+  // 3) Targeted extractors (keep your helpers)
+  const opsObj = extractOpsObject(raw);
+  if (opsObj?.ops && Array.isArray(opsObj.ops)) return opsObj;
+
+  const opsArr = extractOpsArray(raw);
+  if (Array.isArray(opsArr)) return { ops: opsArr };
+
+  const brutal = bruteForceOpsObject(raw);
+  if (brutal?.ops && Array.isArray(brutal.ops)) return brutal;
+
+  // 4) Last resort: try to find any array of { op: ... } in a parsed object
+  if (parsed && typeof parsed === "object") {
+    const candidate = Object.values(parsed).find(
+      v => Array.isArray(v) && v.every(it => it && typeof it === "object" && typeof it.op === "string")
+    );
+    if (candidate) return { ops: candidate };
+  }
+
+  console.error(" GEMINI reply could not be parsed into a valid {ops: []} structure ↓↓↓\n" + raw);
   return { ops: [] };
 }
+
 
 function formatSectionDump(sections, maxChars = 7000) {
   let out = "";
   for (const s of sections) {
-    out += `▼ ${s.name} (${s.bullets.length})\n`;
+    out += `${s.name} (${s.bullets.length})\n`;
     s.bullets.forEach((b) => {
       out += `  • ${b}\n`;
     });
@@ -178,7 +428,6 @@ function formatSectionDump(sections, maxChars = 7000) {
   return out.trim();
 }
 
-// ───────────────────────────── Gemini API callers ─────────────────────────────
 
 async function geminiRefineSkills(apikey, jd, skillsLines, mustInclude = []) {
   const skillsDump = Object.entries(skillsLines)
@@ -197,7 +446,8 @@ You are an AI assistant that refines resume skill sections to match a job descri
 1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, determine the most appropriate skill line and add the skill to that line's CSV somewhere in the middle. Do not duplicate it and add only 80% of words from required skill line if there are more than 5 in total.
 2. **Refine Existing Skills**: Analyze the job description and subtly re-order or adjust existing skills to align with the job's priorities.
 3. **Maintain Original Labels**: Keep the original 'label' for each skill line.
-4. While modifying csv array if you fell the tool is not at all relevant to any of the jd's requirement then you can remove that tool from the final answer you can only remove maximum of 4 items in the entire skills section.
+4. Do **not** delete existing entries; even if something is only loosely related, leave it in place and focus on reordering or appending relevant additions instead of pruning.
+5. If you extract very few new skills from the job description, supplement by adding additional relevant skills while keeping every original entry intact—augment only, never remove.
 
 ## INPUTS
 ### Job Description:
@@ -212,13 +462,16 @@ ${skillsDump}`.trim();
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0,
-      topP: 0.9,
+      topP: 0.7,
+      thinkingConfig: {
+        thinkingBudget: 1400,
+      },
       maxOutputTokens: 4000,
     },
   };
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(
       apikey
     )}`,
     {
@@ -267,12 +520,13 @@ ${(userKeywords || []).join(", ")}`.trim();
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0,
-      maxOutputTokens: 2000,
+      
+      maxOutputTokens: 3000,
     },
   };
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(
       apikey
     )}`,
     {
@@ -293,7 +547,7 @@ ${(userKeywords || []).join(", ")}`.trim();
   };
 }
 
-/** ── NEW: collect verified skills from the resume to keep substitutions truthful */
+/** â”€â”€ NEW: collect verified skills from the resume to keep substitutions truthful */
 function collectResumeSkillKeywords(tex) {
   const labels = [
     "Programming Languages",
@@ -334,8 +588,8 @@ async function geminiPlan(
     inResumeKeywords = [],
   } = {}
 ) {
-  const MIN_WORDS = 34;
-  const MAX_WORDS = 36;
+  const MIN_CHARS = 215;
+  const MAX_CHARS = 228;
 
   const formatHint =
     GEMINI_BULLET_FORMAT === "LATEX"
@@ -345,65 +599,37 @@ async function geminiPlan(
   const tgt = (targetKeywords || []).filter(Boolean).slice(0, 80).join(", ");
   const verified = (inResumeKeywords || []).filter(Boolean).slice(0, 160).join(", ");
 
-  // ───────── JD-ONLY LEXICON + DEVIATION ALLOWED (TRUTHFUL) ─────────
-  const refinedPolicy = `
-As an AI resume editor, your task is to rewrite resume bulletsRewrite each resume bullet so it precisely maps to the provided Job Description (JD) while preserving the original meaning and facts.
 
-Non-Negotiables
+const refinedPolicy = `
+You are an experimental AI resume editor. Rewrite every bullet so it reads as though the candidate already operates inside the Job Description (JD) environment, even when that requires introducing JD technologies or terminology that never appeared in the original resume.
 
-JD First: Mirror the JD’s responsibilities, terminology, and tech stack; prefer the most emphasized tools/frameworks in the JD when multiple are listed.
+## Core Rules: Non-Negotiable
+1.  **JD Stack Supremacy:** Prioritize JD technologies, methodologies, and platform language above the legacy resume stack. Replace legacy tech references with JD-aligned tools unless doing so breaks the quantitative result.
+2.  **Introduce Missing Tools:** When the JD highlights tools the resume never mentioned, incorporate them directly as part of the candidate's responsibilities (e.g., rewrite "Node.js microservices" to "Python/FastAPI services" if the JD favors Python). Treat JD tools as canonical.
+3.  **Metrics & Outcomes Stay Real:** Keep every original metric, scale figure, and business impact unchanged. You may alter the narrative surrounding how the result was achieved, but never modify the numbers.
+4.  **Structure Lock:** STRICTLY maintain the original number of bullets per section and preserve their order.
+5.  **Length Gate:** Every bullet MUST be between ${MIN_CHARS} and ${MAX_CHARS} characters.
+6.  **No Company Name:** STRICTLY omit the word "${company}" and any internal-only tool names.
+7.  **Technology Repetition Cap:** Limit any specific technology (e.g., "React," "Java," "AWS") to a maximum of four mentions across the entire rewritten set.
 
-STRICT: No ${company}: Do not include the word ${company} and omit any employer-specific/internal tools.
+## JD Alignment Playbook
+1.  **Lead with JD Priorities:** Anchor each bullet in the JD's verbs, responsibilities, and stack emphases (backend services, observability, ML Ops, governance, etc.).
+2.  **Overhaul Legacy Tech:** Default to swapping legacy technologies with JD technologies. If a legacy stack must remain for context, frame it as the prior state or supporting layer underneath the JD stack.
+3.  **Expand Domain Signals:** Add JD domain vocabulary (e.g., "regulatory reporting," "quantitative risk models," "low-latency pipelines") even when the source bullet used broader phrasing.
+4.  **Tie Metrics to JD Outcomes:** Explain every preserved metric in terms of the outcomes the JD values (latency, reliability, experimentation speed, cost efficiency, compliance).
+5.  **Use Decisive Verbs:** Begin each bullet with verbs that match the JD tone ("Architected," "Orchestrated," "Operationalized," "Hardened," etc.).
+6.  **No Safe Fallbacks:** If a JD expectation cannot be matched directly, describe how the candidate enabled or partnered with teams using that JD stack instead of reverting to the legacy narrative.
 
-Structure Lock: Keep the exact number of bullets per section and preserve their order.
+## Quality & Style
+* Exactly one sentence per bullet; remove filler words.
+* Never end a bullet with vague phrases like "enhancing user experience," "improving performance," "effectively," "significantly," or "aligning with."
+* Default to rewriting; retaining the original wording is a last resort.
 
-Length Gate: Every bullet must be between ${MIN_WORDS} and ${MAX_WORDS} words.
-
-Fact Integrity: Keep all facts; if a bullet contains metrics, create an additional bullet that integrates the metric and aligns it to the JD.
-
-Quality Bar: Only replace a bullet if the new version is more optimized; otherwise, retain the original.
-
-Tool Emphasis: When the JD lists multiple technologies, prioritize the one most stressed in the JD.
-
-Uniqueness Constraint: Do not repeat the same skill/technology across bullets; if a tool cannot be woven in without duplication, keep the existing bullet.
-
-Global Repetition Cap: Ensure tools/technologies do not appear more than twice across the entire rewritten set.
-
-Style Rules
-
-One sentence per bullet, dense and information-rich.
-
-Start with a strong action verb (e.g., Architected, Automated, Orchestrated, Optimized).
-
-No filler (avoid terms like “successfully,” “various,” “multiple”).
-
-Be exacting: Specify versions and configurations where relevant (e.g., “React 18,” “Python 3.11,” “PostgreSQL 14,” “Kubernetes 1.30”).
-
-No generalities: Prefer concrete scope, scale, and impact details consistent with the source bullet.
-
-Transformation Rules
-
-Map to JD: Replace original terminology with JD vocabulary while preserving the underlying achievement.
-
-Integrate Metrics: If any metric exists, add a separate bullet tying the metric to JD outcomes (performance, reliability, cost, security, UX, etc.).
-
-Optimize, Don’t Inflate: Tighten phrasing, clarify outcomes, and align tools—never invent facts.
-
-Avoid Duplication: Enforce the no-repeat rule for skills/tech across all bullets; if conflict arises, keep the original bullet unmodified.
-
-Final Pass: Confirm all bullets meet word count, order, JD alignment, fact preservation, and repetition limits.
-
-Output Requirements
-
-Return the bullets in the original section order and count.
-
-Each bullet: ${MIN_WORDS}–${MAX_WORDS} words, one sentence, action-led, JD-aligned, and fact-accurate.
-
-Include extra metric bullets only when the source bullet contains metrics, ensuring they also follow all rules above.
-
-Never ever end a sentence with fillers like ""aligning with" etc
+## Output Requirements
+* Return bullets in their original section order and count.
+* Each bullet must follow all rules above.
+* each bullet must strictly adhere to the length window of ${MIN_CHARS}-${MAX_CHARS} characters.
 `;
-
   const instructionBlock = userPrompt?.trim()
     ? `## USER PROMPT (Respect the spirit if provided)\n${userPrompt.trim()}\n`
     : "";
@@ -414,50 +640,78 @@ Never ever end a sentence with fillers like ""aligning with" etc
   const sectionsDump = formatSectionDump(targetSections);
 
   const windowReminder = targetSections
-    .map(sec => sec.bullets.map(() => `${MIN_WORDS}-${MAX_WORDS}`).join(", "))
+    .map(sec => sec.bullets.map(() => `${MIN_CHARS}-${MAX_CHARS}`).join(", "))
     .join("; ");
 
   const schema =
-    'Return STRICT JSON ONLY:\n{"ops":[{"op":"replace_bullets","section":"Section Name","bullets":["...", "..."]}]}';
+    'RETURN ONLY THIS EXACT JSON (no extra text, no code fences, no trailing characters):\n{"ops":[{"op":"replace_bullets","section":"Section Name","bullets":["...", "..."]}]}';
 
-  const payload = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `
+const responseSchema = {
+  type: "object",
+  properties: {
+    ops: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["replace_bullets", "replace"] },
+          section: { type: "string" },
+          bullets: {
+            type: "array",
+            items: { type: "string" }
+          }
+        },
+        required: ["op", "section", "bullets"]
+      }
+    }
+  },
+  required: ["ops"]
+};
+
+
+ const payload = {
+  contents: [
+    {
+      role: "user",
+      parts: [
+        {
+          text: `
 ${refinedPolicy}
 ${instructionBlock}
 ## INPUTS
 ### Job Description:
-${String(jd).slice(0, 5000)}
+${String(jd)}
 
-### TARGET ROLE STACK (from JD/Category) — prioritize these:
+### TARGET ROLE STACK (from JD/Category) - prioritize these:
 ${tgt || "None"}
 
-### Current Bullets (keep same COUNT & ORDER; rewrite EACH to ${MIN_WORDS}-${MAX_WORDS} words; PRESERVE existing metrics):
+### Resume Stack Hints (legacy context only; JD may supersede these):
+${verified || "None"}
+
+### Current Bullets (keep same COUNT & ORDER; rewrite EACH to strictly ${MIN_CHARS}-${MAX_CHARS} characters; PRESERVE existing metrics):
 ${sectionsDump}
 
-### Required word-count window for each bullet (by position):
+### Required character-count window for each bullet (by position):
 [${windowReminder}]
 
-## OUTPUT FORMAT
-${schema}`.trim(),
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0.15,
-      topP: 0.8,
-      maxOutputTokens: 5000,
+Return JSON only.`.trim(),
+        },
+      ],
     },
-  };
+  ],
+  generationConfig: {
+    responseMimeType: "application/json",
+    responseSchema,                // ⬅️ moved here
+    temperature: 0.15,
+    topP: 0.8,
+    thinkingConfig: { thinkingBudget: 5000 },
+    maxOutputTokens: 8000,
+  },
+};
+
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
       apikey
     )}`,
     {
@@ -476,7 +730,7 @@ ${schema}`.trim(),
 }
 
 
-// ───────────────────────────── LaTeX helpers ─────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ LaTeX helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function findSubsections(tex) {
   const sections = [];
@@ -658,7 +912,7 @@ function splitIntoCandidateBullets(s) {
   const text = String(s || "");
   if (!text) return [""];
   const parts = text
-    .split(/\n(?=(?:[-–—•]|\d+\.)\s+)|(?<=;)\s+(?=[A-Z(])|(?:\s*\\item\s+)/g)
+    .split(/\n(?=(?:[-â€“â€”â€¢]|\d+\.)\s+)|(?<=;)\s+(?=[A-Z(])|(?:\s*\\item\s+)/g)
     .map(x => x.trim());
   return parts.length > 1 ? parts : [text.trim()];
 }
@@ -689,7 +943,7 @@ function normalizeAIBulletsForSection(originalBulletsLive, aiBulletsRaw, format 
 
   const finalize = (s) =>
     (format === "LATEX"
-      ? String(s || "").replace(/\s*\(\d+\s+words?\)\s*$/i, "").replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "").replace(/\s{2,}/g, " ").trim()
+      ? String(s || "").replace(/\s*\(\d+\s+(?:words?|chars?|characters?)\)\s*$/i, "").replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "").replace(/\s{2,}/g, " ").trim()
       : cleanBullet(s));
 
   return flat.map(finalize);
@@ -699,7 +953,7 @@ function splitMergedBulletText(s) {
   const t = String(s || "").trim();
   if (!t) return [""];
   const parts = t
-    .split(/\s*(?:\\item\s+)|\n(?=(?:[-–—•]|\d+\.)\s+)/g)
+    .split(/\s*(?:\\item\s+)|\n(?=(?:[-â€“â€”â€¢]|\d+\.)\s+)/g)
     .map(x => x.trim());
   return parts.length ? parts : [t];
 }
@@ -717,7 +971,7 @@ function applyOps(tex, ops) {
 
   for (const op of ops || []) {
     try {
-      if (op.op === "replace_bullets") {
+      if (op.op === "replace_bullets" || op.op === "replace") {
         const sectionName = cleanName(op.section || "");
         let sec = sectionMap[sectionName.toLowerCase()];
         if (!sec) sec = sectionNormMap[normalizeTitle(sectionName)];
@@ -763,7 +1017,7 @@ function applyOps(tex, ops) {
   return out;
 }
 
-// ────────────────────────── PDF Compilation Utils ──────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ PDF Compilation Utils â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function compileToPdf(texSource, clsContent = "") {
   const fd = new FormData();
@@ -802,7 +1056,7 @@ async function compileToPdf(texSource, clsContent = "") {
 
   if (!isPdf) {
     const log = new TextDecoder().decode(head);
-    console.error("FULL LaTeX log ↓↓↓\n" + log);
+    console.error("FULL LaTeX log â†“â†“â†“\n" + log);
 
     const markers = [
       "! ",
@@ -834,13 +1088,33 @@ function arrayBufferToBase64(buf) {
   return btoa(binary);
 }
 
-// ─────────────────────────── Main message handler ───────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Main message handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // IMPORTANT: Exactly one listener; no duplicates.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  (async () => {
-    if (msg.type !== "PROCESS_JD_PIPELINE") return;
+  if (!msg?.type) return;
 
+  if (msg.type === "OPEN_MINI_PANEL") {
+    (async () => {
+      try {
+        const info = await injectOverlayIntoActiveTab();
+        sendResponse?.({ ok: true, tabId: info?.tabId ?? null });
+      } catch (err) {
+        console.error("Failed to open mini overlay", err);
+        sendResponse?.({
+          ok: false,
+          error: err?.message || "Unable to show status overlay.",
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type !== "PROCESS_JD_PIPELINE") return;
+
+  let generationToken = null;
+
+  (async () => {
     const { jd, company, prompt, categoryId, selectedProjectIds } = msg.payload || {};
     const { resumeData: DB } = await chrome.storage.local.get("resumeData");
 
@@ -848,6 +1122,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const category = DB.categories.find((c) => c.id === categoryId);
     if (!category || !category.latex)
       throw new Error("Selected category not found or has no LaTeX template.");
+
+    generationToken = `gen_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    await mergePopupState({
+      generationToken,
+      generationStartedAt: Date.now(),
+      status: "Building .tex + Planning + Rewriting + Compiling...",
+      pdfB64: "",
+      pdfFilename: "",
+      generationInBackground: true,
+    });
 
     // --- 1) Build LaTeX with dynamic Projects (marker first, fallback to section) ---
     let latex = category.latex;
@@ -909,8 +1195,8 @@ const { skillsMissing, importantMissing } = await geminiExtractMissing(
   jd,
   categoryKeywords
 );
-console.log("🔍 Extracted missing skills:", skillsMissing);
-console.log("🔍 Extracted important missing keywords:", importantMissing);
+console.log(" Extracted missing skills:", skillsMissing);
+console.log(" Extracted important missing keywords:", importantMissing);
 
 // Build targeting lists (JD-first so the model pivots aggressively to the JD)
 const inResumeKeywords = collectResumeSkillKeywords(latex); // from Skills section
@@ -957,12 +1243,41 @@ let finalLatex = applyOps(latex, bulletOps);
     console.log("--- FINAL LATEX SOURCE TO BE COMPILED ---\n\n", finalLatex);
     const pdfBuf = await compileToPdf(finalLatex, category.clsFileContent);
     const pdfB64 = arrayBufferToBase64(pdfBuf);
+    const companySlug =
+      (company || "").trim().replace(/\s+/g, "_") || "Generated";
+    const downloadName = `Vipul_Charugundla_${companySlug}.pdf`;
+
+    await mergePopupState(
+      {
+        status: "PDF ready!",
+        pdfB64,
+        pdfFilename: downloadName,
+        generationToken: null,
+        generationInBackground: false,
+        lastGeneratedAt: Date.now(),
+      },
+      { token: generationToken }
+    );
+
     sendResponse({ pdfB64, tex: finalLatex });
   })()
-    .catch((err) => {
+    .catch(async (err) => {
       console.error("PIPELINE FAILED:", err);
-      sendResponse({ error: err.message });
+      const message = err?.message || "Unexpected error. See console.";
+      await mergePopupState(
+        {
+          status: message,
+          pdfB64: "",
+          pdfFilename: "",
+          generationToken: null,
+          generationInBackground: false,
+          lastErrorAt: Date.now(),
+        },
+        { token: generationToken }
+      );
+      sendResponse({ error: message });
     });
 
   return true; // keep the message channel open for async sendResponse
 });
+

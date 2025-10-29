@@ -1,0 +1,68 @@
+*** Begin Patch
+*** Update File: background.js
+@@
+ function safeJsonFromGemini(raw) {
+@@
+   if (parsed) return parsed;
+@@
+   console.warn("safeJsonFromGemini failed to parse JSON after sanitize:", txt);
+   return null;
+ }
++// Targeted extractor for the ops array if the wrapper is corrupted.
++function extractOpsArray(raw) {
++  if (!raw) return null;
++  const txt = String(raw);
++  const m = txt.match(/\"ops\"\s*:\s*/);
++  if (!m) return null;
++  const afterKey = txt.indexOf(m[0]) + m[0].length;
++  const start = txt.indexOf("[", afterKey);
++  if (start === -1) return null;
++
++  const openers = { '{': '}', '[': ']' };
++  const closers = new Set(Object.values(openers));
++  const stack = [']'];
++  let inString = false;
++  let escaping = false;
++
++  for (let i = start + 1; i < txt.length; i++) {
++    const ch = txt[i];
++    if (escaping) { escaping = false; continue; }
++    if (ch === '\\') { escaping = true; continue; }
++    if (ch === '"') { inString = !inString; continue; }
++    if (inString) continue;
++
++    if (openers[ch]) { stack.push(openers[ch]); continue; }
++    if (closers.has(ch)) {
++      const need = stack[stack.length - 1];
++      if (ch !== need) return null; // mismatched
++      stack.pop();
++      if (!stack.length) {
++        const segment = txt.slice(start, i + 1);
++        try {
++          const sanitized = segment.replace(/\\(?![\"\\\/bfnrtu])/g, "\\\\");
++          const arr = JSON.parse(sanitized);
++          return Array.isArray(arr) ? arr : null;
++        } catch (_) {
++          return null;
++        }
++      }
++    }
++  }
++  return null;
++}
+@@
+ async function robustGeminiParse(resp) {
+   const raw = resp?.trim?.() || "";
+   const parsed = safeJsonFromGemini(raw);
+   if (parsed?.ops && Array.isArray(parsed.ops)) return parsed;
+   if (Array.isArray(parsed)) return { ops: parsed };
+   if (parsed && typeof parsed === "object") {
+     const opsCandidate = Object.values(parsed).find(
+       (val) => Array.isArray(val) && val.every((item) => item && typeof item === "object" && typeof item.op === "string")
+     );
+     if (opsCandidate) return { ops: opsCandidate };
+   }
++  // Fallback: try extracting the ops array directly from the raw text
++  const opsArr = extractOpsArray(raw);
++  if (Array.isArray(opsArr)) return { ops: opsArr };
+*** End Patch
