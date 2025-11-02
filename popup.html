@@ -14,7 +14,7 @@
     margin-bottom: 8px;
   }
   h3 { margin: 0; }
-  .minimize-btn {
+  .close-btn {
     border: none;
     background: rgba(255,255,255,0.08);
     color: var(--text);
@@ -24,7 +24,7 @@
     cursor: pointer;
     transition: background 0.15s ease;
   }
-  .minimize-btn:hover {
+  .close-btn:hover {
     background: rgba(255,255,255,0.15);
   }
   p.muted { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
@@ -56,13 +56,6 @@
   .button-row { display:flex; gap:8px; margin-top:10px; align-items:center; }
   .button-row .ghost { margin-left:auto; }
   .required { color:#ffb3b3; }
-  body[data-minimized="1"] { width: 240px; }
-  body[data-minimized="1"] .form-fields { display: none; }
-  body[data-minimized="1"] .button-row { margin-top:0; justify-content: space-between; }
-  body[data-minimized="1"] .button-row .ghost { display: none; }
-  body[data-minimized="1"] #generate { display: none; }
-  body[data-minimized="1"] #downloadPdf { display: inline-flex; }
-  body[data-minimized="1"] .status { margin-top: 4px; min-height: auto; }
   #projectSelection label { display: block; margin: 4px 0; font-size: 13px; color: var(--text); }
 </style>
 
@@ -71,7 +64,7 @@
   <div class="wrap">
     <div class="header">
       <h3>ATS Resume Enhancer</h3>
-      <button id="minimizePanel" class="minimize-btn" type="button" title="Minimize to status view">Minimize</button>
+      <button id="closePopup" class="close-btn" type="button" title="Close this window">Close</button>
     </div>
     <p class="muted">Select a category and projects to build your resume.</p>
     <div class="card">

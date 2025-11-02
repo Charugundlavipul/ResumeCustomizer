@@ -140,31 +140,9 @@
     const projectContainer = $("projectSelection");
     const pdfLink = $("downloadPdf");
     const generateBtn = $("generate");
-    const minimizeBtn = $("minimizePanel");
+    const closeBtn = $("closePopup");
 
     await loadPopupState();
-
-    const requestOverlay = () =>
-      chrome.runtime
-        .sendMessage({ type: "OPEN_MINI_PANEL" })
-        .catch((err) => {
-          console.warn("Overlay inject failed", err);
-          return null;
-        });
-
-    const rootEl = document.body;
-    const setMinimized = (flag) => {
-      const value = flag ? "1" : "0";
-      rootEl.dataset.minimized = value;
-      if (minimizeBtn) {
-        minimizeBtn.textContent = flag ? "Restore" : "Minimize";
-        minimizeBtn.title = flag
-          ? "Restore full view"
-          : "Minimize to status view";
-      }
-    };
-
-    let overlayRequestedOnBlur = false;
 
     const applyStateToDom = () => {
       companyInput.value = popupState.company || "";
@@ -200,22 +178,11 @@
     };
 
     applyStateToDom();
-    setMinimized(false);
     hydratePdfLink(pdfLink);
 
-    if (minimizeBtn) {
-      minimizeBtn.addEventListener("click", async () => {
-        const nextMinimized = rootEl.dataset.minimized !== "1";
-        if (nextMinimized) {
-          const resp = await requestOverlay();
-          if (!resp?.ok) {
-            const message = resp?.error || "Unable to show minimized status.";
-            statusEl.textContent = message;
-            updateState({ status: message }, { flush: true });
-            return;
-          }
-        }
-        setMinimized(nextMinimized);
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        window.close();
       });
     }
 
@@ -331,8 +298,6 @@
         { flush: true }
       );
 
-      requestOverlay();
-
       try {
         const resp = await chrome.runtime.sendMessage({
           type: "PROCESS_JD_PIPELINE",
@@ -389,20 +354,5 @@
       }
     });
 
-    window.addEventListener("focus", () => {
-      overlayRequestedOnBlur = false;
-    });
-
-    window.addEventListener("blur", () => {
-      if (overlayRequestedOnBlur) return;
-      const shouldShowOverlay =
-        popupState.generationInBackground ||
-        Boolean(popupState.pdfB64) ||
-        Boolean(popupState.status);
-      if (!shouldShowOverlay) return;
-      overlayRequestedOnBlur = true;
-      requestOverlay();
-    });
   });
 })();
-

@@ -36,34 +36,36 @@ const GEMINI_BULLET_FORMAT = "TEXT"; // "TEXT" | "LATEX"
 const ENFORCE_METRIC_VISIBILITY = false; // never append "(retained metrics: ...)" text
 
 const POPUP_STATE_KEY = "popupState";
+let popupWindowId = null;
 
-async function getActiveTab() {
-  if (!chrome?.tabs?.query) return null;
-  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  return tabs?.[0] || null;
-}
-
-async function injectOverlayIntoActiveTab() {
-  if (!chrome?.scripting?.executeScript) {
-    throw new Error("Missing scripting permission for overlay inject.");
+async function openOrFocusPopupWindow() {
+  if (popupWindowId !== null) {
+    try {
+      await chrome.windows.update(popupWindowId, { focused: true });
+      return;
+    } catch (err) {
+      popupWindowId = null;
+    }
   }
 
-  const tab = await getActiveTab();
-  if (!tab?.id || !tab?.url) {
-    throw new Error("No active tab available for overlay.");
-  }
-
-  if (/^(chrome|edge|about|devtools):/i.test(tab.url)) {
-    throw new Error("Cannot show overlay on this page.");
-  }
-
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    files: ["overlay.js"],
+  const created = await chrome.windows.create({
+    url: chrome.runtime.getURL("popup.html"),
+    type: "popup",
+    width: 460,
+    height: 720,
   });
-
-  return { tabId: tab.id };
+  popupWindowId = created?.id ?? null;
 }
+
+chrome.action.onClicked.addListener(() => {
+  openOrFocusPopupWindow().catch((err) =>
+    console.error("Failed to open ATS popup window", err)
+  );
+});
+
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === popupWindowId) popupWindowId = null;
+});
 
 async function mergePopupState(partial, { token, overwrite = false } = {}) {
   try {
@@ -501,7 +503,7 @@ Your entire response MUST be a single raw JSON object.
 { "skills": ["string"], "important": ["string"] }
 
 ### Key Descriptions:
-- **skills**: An array of up to 12 strictly technical skills (frameworks, tools, databases) from the JD, not in the user's list.
+- **skills**: An array of exactly between 4 to 12 strictly technical skills (frameworks, tools, databases) from the JD, not in the user's list.
 - **important**: An array of up to 12 high-impact keywords (methodologies, qualifications like "performance optimization", "CI/CD pipelines") from the JD do not extract keyword which are non technical or pay/wage related.
 
 ## RULES
@@ -521,12 +523,12 @@ ${(userKeywords || []).join(", ")}`.trim();
       responseMimeType: "application/json",
       temperature: 0,
       
-      maxOutputTokens: 3000,
+      maxOutputTokens: 6000,
     },
   };
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
       apikey
     )}`,
     {
@@ -553,7 +555,7 @@ function collectResumeSkillKeywords(tex) {
     "Programming Languages",
     "Frameworks & Libraries",
     "Databases",
-    "Tools and Technologies",
+    "Tools",
     "Cloud & DevOps",
     "Development Practices",
     "Certifications",
@@ -704,7 +706,7 @@ Return JSON only.`.trim(),
     responseSchema,                // ⬅️ moved here
     temperature: 0.15,
     topP: 0.8,
-    thinkingConfig: { thinkingBudget: 5000 },
+    thinkingConfig: { thinkingBudget: 4400 },
     maxOutputTokens: 8000,
   },
 };
@@ -730,7 +732,7 @@ Return JSON only.`.trim(),
 }
 
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ LaTeX helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ──────────────────────────────────────────────────────────────────────── LaTeX helpers ─────────────────────────────────────────────────────────────────────
 
 function findSubsections(tex) {
   const sections = [];
@@ -1094,22 +1096,6 @@ function arrayBufferToBase64(buf) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg?.type) return;
 
-  if (msg.type === "OPEN_MINI_PANEL") {
-    (async () => {
-      try {
-        const info = await injectOverlayIntoActiveTab();
-        sendResponse?.({ ok: true, tabId: info?.tabId ?? null });
-      } catch (err) {
-        console.error("Failed to open mini overlay", err);
-        sendResponse?.({
-          ok: false,
-          error: err?.message || "Unable to show status overlay.",
-        });
-      }
-    })();
-    return true;
-  }
-
   if (msg.type !== "PROCESS_JD_PIPELINE") return;
 
   let generationToken = null;
@@ -1221,7 +1207,7 @@ let finalLatex = applyOps(latex, bulletOps);
       "Programming Languages",
       "Frameworks & Libraries",
       "Databases",
-      "Tools and Technologies",
+      "Tools",
       "Cloud & DevOps",
       "Development Practices",
       "Certifications",

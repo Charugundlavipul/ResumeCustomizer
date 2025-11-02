@@ -12,7 +12,8 @@
     "downloads",
     "scripting",
     "tabs",
-    "activeTab"
+    "activeTab",
+    "windows"
   ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",

@@ -44,17 +44,17 @@ document.addEventListener("DOMContentLoaded", () => {
     const up = document.createElement("button");
     up.type = "button";
     up.className = "small move-up";
-    up.textContent = "↑";
+    up.textContent = "Up";
 
     const down = document.createElement("button");
     down.type = "button";
     down.className = "small move-down";
-    down.textContent = "↓";
+    down.textContent = "Down";
 
     const del = document.createElement("button");
     del.type = "button";
     del.className = "small danger remove-bullet";
-    del.textContent = "✕";
+    del.textContent = "Remove";
 
     row.appendChild(input);
     row.appendChild(up);
@@ -195,7 +195,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // robust to minor id typos in HTML
       const stateEl = $("apikeyState") || $("apikeytate") || $("apikeyStatus");
       if (stateEl) {
-        stateEl.textContent = "Saved ✓";
+        stateEl.textContent = "Saved";
         setTimeout(() => { stateEl.textContent = ""; }, 2000);
       }
     });
