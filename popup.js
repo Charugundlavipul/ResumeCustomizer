@@ -7,6 +7,7 @@
   const DEFAULT_STATE = {
     activeTab: "resume", // "resume" or "coverLetter"
     company: "",
+    location: "",
     jd: "",
     prompt: "",
     categoryId: "",
@@ -193,6 +194,7 @@
 
     const statusEl = $("status");
     const companyInput = $("company");
+    const locationInput = $("location");
     const jdInput = $("jd");
     const promptInput = $("prompt");
     const categorySelect = $("categorySelect");
@@ -213,6 +215,11 @@
 
     const applyStateToDom = () => {
       companyInput.value = popupState.company || "";
+      const resolvedLocation = popupState.location || DB.location || "";
+      locationInput.value = resolvedLocation;
+      if (!popupState.location && DB.location) {
+        updateState({ location: DB.location });
+      }
       jdInput.value = popupState.jd || "";
       promptInput.value = popupState.prompt || "";
       clCompanyDetails.value = popupState.clCompanyDetails || "";
@@ -307,6 +314,7 @@
     };
 
     handleInput(companyInput, "company");
+    handleInput(locationInput, "location");
     handleInput(jdInput, "jd");
     handleInput(promptInput, "prompt");
     handleInput(clCompanyDetails, "clCompanyDetails");
@@ -364,6 +372,7 @@
 
     generateBtn.addEventListener("click", async () => {
       const company = companyInput.value.trim();
+      const location = locationInput.value.trim();
       const jd = jdInput.value.trim();
       const categoryId = categorySelect.value;
       const selectedProjectIds = Array.from(
@@ -398,6 +407,7 @@
         {
           status: statusEl.textContent,
           company,
+          location,
           jd,
           prompt: promptInput.value.trim(),
           categoryId,
@@ -415,6 +425,7 @@
           payload: {
             jd,
             company,
+            location,
             prompt: promptInput.value.trim(),
             categoryId,
             selectedProjectIds
@@ -467,6 +478,7 @@
 
     generateClBtn.addEventListener("click", async () => {
       const company = companyInput.value.trim();
+      const location = locationInput.value.trim();
       const jd = clJdInput.value.trim(); // Use the CL JD input
       const categoryId = categorySelect.value;
       const clDetails = clCompanyDetails.value.trim();
@@ -517,6 +529,7 @@
           payload: {
             jd,
             company,
+            location,
             clDetails,
             categoryId,
             selectedProjectIds

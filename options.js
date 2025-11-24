@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
   // --- State & Storage ---
-  let DB = { apikey: "", categories: [], projects: [] };
+  let DB = { apikey: "", location: "", categories: [], projects: [] };
 
   const storage = {
     get: () =>
@@ -191,6 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // API Key & Settings
     $("saveApiKey").addEventListener("click", async () => {
       DB.apikey = $("apikey").value.trim();
+      DB.location = $("defaultLocation").value.trim();
       await storage.set(DB);
       // robust to minor id typos in HTML
       const stateEl = $("apikeyState") || $("apikeytate") || $("apikeyStatus");
@@ -354,8 +355,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Initialization ---
   const load = async () => {
-    DB = await storage.get();
+    DB = { apikey: "", location: "", categories: [], projects: [], ...(await storage.get()) };
     $("apikey").value = DB.apikey || "";
+    $("defaultLocation").value = DB.location || "";
     renderAll();
   };
 

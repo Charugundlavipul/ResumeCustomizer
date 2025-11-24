@@ -941,6 +941,70 @@ function replaceSkillLine(tex, label, csv) {
 
 const cleanName = (s) => String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim();
 
+const DEFAULT_LOCATION = "Buffalo, New York";
+
+const capToken = (token) =>
+  token
+    .split(/([-'])/)
+    .map((part) =>
+      part === "-" || part === "'"
+        ? part
+        : part
+          ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()
+          : ""
+    )
+    .join("");
+
+// Normalize company names for display (each word and hyphenated part starts with a capital letter)
+function formatCompanyName(name) {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return "";
+  return trimmed
+    .split(/\s+/)
+    .map(capToken)
+    .filter(Boolean)
+    .join(" ");
+}
+
+// Normalize a "City, State" style string; fallback handled by caller
+function formatLocation(loc) {
+  const trimmed = String(loc || "").trim();
+  if (!trimmed) return "";
+  const segments = trimmed.split(",").map(s => s.trim()).filter(Boolean);
+  const formatSegment = (seg) =>
+    seg
+      .split(/\s+/)
+      .map(capToken)
+      .filter(Boolean)
+      .join(" ");
+  return segments.map(formatSegment).join(", ");
+}
+
+function applyLocationToLatex(tex, locationRaw) {
+  const formatted = formatLocation(locationRaw) || DEFAULT_LOCATION;
+  const escaped = escapeLatex(formatted);
+
+  const defRe = new RegExp(DEFAULT_LOCATION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+  if (defRe.test(tex)) {
+    return tex.replace(defRe, escaped);
+  }
+
+  const headerLocRe = /(^|\n)(\s*)([A-Za-z][A-Za-z .'-]+,\s*[A-Za-z][A-Za-z .'-]+)(\s*(?:\$\\;\\|\\;\\$|\$\\|\\$|\\\|\$?|\\|))/;
+  if (headerLocRe.test(tex)) {
+    return tex.replace(headerLocRe, (_m, lead, ws, _old, trail) => `${lead}${ws}${escaped}${trail}`);
+  }
+
+  return tex;
+}
+
+function resolveLocation(userLocation, storedLocation) {
+  return (
+    formatLocation(userLocation) ||
+    formatLocation(storedLocation) ||
+    DEFAULT_LOCATION
+  );
+}
+
 function fixCommonLatexBugs(tex) {
   let t = tex;
 
@@ -1142,9 +1206,13 @@ function arrayBufferToBase64(buf) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Main message handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-async function geminiGenerateCoverLetter(apikey, company, jd, companyDetails, resumeLatex) {
+async function geminiGenerateCoverLetter(apikey, company, jd, companyDetails, resumeLatex, location) {
+  const companyDisplay = formatCompanyName(company) || String(company || "").trim();
+  const locationDisplay = formatLocation(location) || DEFAULT_LOCATION;
+  const locationLatex = escapeLatex(locationDisplay);
+
   const prompt = `
-You are an expert career coach and professional writer. Write a compelling, personalized cover letter for the role at ${company}.
+You are an expert career coach and professional writer. Write a compelling, personalized cover letter for the role at ${companyDisplay || "the company"}.
 
 ## INPUTS
 ### Job Description:
@@ -1209,8 +1277,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "PROCESS_COVER_LETTER") {
     let generationToken = null;
     (async () => {
-      const { jd, company, clDetails, categoryId, selectedProjectIds } = msg.payload || {};
+      const { jd, company, location, clDetails, categoryId, selectedProjectIds } = msg.payload || {};
       const { resumeData: DB } = await chrome.storage.local.get("resumeData");
+      const companyDisplay = formatCompanyName(company) || String(company || "").trim();
+      const locationDisplay = resolveLocation(location, DB?.location);
+      const locationLatex = escapeLatex(locationDisplay);
 
       if (!DB?.apikey) throw new Error("Missing API key in Options.");
       const category = DB.categories.find((c) => c.id === categoryId);
@@ -1250,7 +1321,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // Wait, I need to make sure I use the right model name.
       // In the file, line 524 uses `gemini-2.5-flash-lite`. I will use that.
 
-      const bodyText = await geminiGenerateCoverLetter(DB.apikey, company, jd, clDetails, resumeContext);
+      const bodyText = await geminiGenerateCoverLetter(DB.apikey, company, jd, clDetails, resumeContext, locationDisplay);
 
       // 3. Wrap in LaTeX Template
       const escapedBody = escapeLatex(bodyText).replace(/\n\n/g, "\\par\\vspace{10pt}\n");
@@ -1286,7 +1357,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 \\begin{document}
 \\begin{center}
     \\textbf{\\LARGE \\scshape Vipul Charugundla} \\\\ \\vspace{5pt}
-    Buffalo, New York $|$ (716) 710-7704 $|$ charugundlavipul@gmail.com \\\\
+    ${locationLatex} $|$ (716) 710-7704 $|$ charugundlavipul@gmail.com \\\\
     \\href{https://www.linkedin.com/in/charugundla-vipul-3911561aa/}{LinkedIn} $|$ \\href{https://github.com/Charugundlavipul}{GitHub} $|$ \\href{https://vipulcharugundla.netlify.app/}{Portfolio}
 \\end{center}
 \\vspace{0.3in}
@@ -1295,7 +1366,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 \\vspace{0.2in}
 
-Dear ${escapeLatex(company)} Hiring Team,
+Dear ${escapeLatex(companyDisplay || "Company")} Hiring Team,
 
 \\vspace{0.1in}
 
@@ -1310,12 +1381,12 @@ Vipul Charugundla
 
       // 3b. Construct Plain Text Version (for Copy Text)
       const plainTextCoverLetter = `Vipul Charugundla
-Buffalo, New York | (716) 710-7704 | charugundlavipul@gmail.com
+${locationDisplay} | (716) 710-7704 | charugundlavipul@gmail.com
 LinkedIn (https://www.linkedin.com/in/charugundla-vipul-3911561aa/) | GitHub (https://github.com/Charugundlavipul) | Portfolio (https://vipulcharugundla.netlify.app/)
 
 ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
 
-Dear ${company} Hiring Team,
+Dear ${companyDisplay || "Company"} Hiring Team,
 
 ${bodyText}
 
@@ -1326,7 +1397,7 @@ Vipul Charugundla`;
       console.log("--- FINAL COVER LETTER LATEX ---\n", clTemplate);
       const pdfBuf = await compileToPdf(clTemplate);
       const pdfB64 = arrayBufferToBase64(pdfBuf);
-      const companySlug = (company || "").trim().replace(/\s+/g, "_") || "Generated";
+      const companySlug = (companyDisplay || "").replace(/\s+/g, "_") || "Generated";
       const downloadName = `CoverLetter_Vipul_${companySlug}.pdf`;
 
       await mergePopupState(
@@ -1365,8 +1436,9 @@ Vipul Charugundla`;
   let generationToken = null;
 
   (async () => {
-    const { jd, company, prompt, categoryId, selectedProjectIds } = msg.payload || {};
+    const { jd, company, location, prompt, categoryId, selectedProjectIds } = msg.payload || {};
     const { resumeData: DB } = await chrome.storage.local.get("resumeData");
+    const locationDisplay = resolveLocation(location, DB?.location);
 
     if (!DB?.apikey) throw new Error("Missing API key in Options.");
     const category = DB.categories.find((c) => c.id === categoryId);
@@ -1486,6 +1558,9 @@ ${bullets}
     }
     const skillOps = await geminiRefineSkills(apikey, jd, skills, skillsMissing);
     finalLatex = applyOps(finalLatex, skillOps);
+
+    // Contact header location (defaulting if none provided)
+    finalLatex = applyLocationToLatex(finalLatex, locationDisplay);
 
     // Fix common LaTeX pitfalls before compiling
     finalLatex = fixCommonLatexBugs(finalLatex);
