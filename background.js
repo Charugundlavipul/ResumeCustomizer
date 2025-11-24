@@ -36,35 +36,83 @@ const GEMINI_BULLET_FORMAT = "TEXT"; // "TEXT" | "LATEX"
 const ENFORCE_METRIC_VISIBILITY = false; // never append "(retained metrics: ...)" text
 
 const POPUP_STATE_KEY = "popupState";
-let popupWindowId = null;
 
-async function openOrFocusPopupWindow() {
-  if (popupWindowId !== null) {
-    try {
-      await chrome.windows.update(popupWindowId, { focused: true });
-      return;
-    } catch (err) {
-      popupWindowId = null;
+// Track one popup window per originating tab
+const popupWindowsByTab = new Map(); // tabId -> windowId
+const tabIdByPopupWindow = new Map(); // windowId -> tabId
+
+async function openOrFocusPopupWindowForTab(tabId) {
+  try {
+    // Fallback: resolve current active tab if not provided
+    if (tabId == null) {
+      const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (active?.id != null) tabId = active.id;
     }
-  }
 
-  const created = await chrome.windows.create({
-    url: chrome.runtime.getURL("popup.html"),
-    type: "popup",
-    width: 460,
-    height: 720,
-  });
-  popupWindowId = created?.id ?? null;
+    // If still no tab, just open a standalone popup
+    if (tabId == null) {
+      const created = await chrome.windows.create({
+        url: chrome.runtime.getURL("popup.html"),
+        type: "popup",
+        width: 460,
+        height: 720,
+      });
+      if (created?.id != null) {
+        // Not mapped to any tab
+      }
+      return;
+    }
+
+    const existingWinId = popupWindowsByTab.get(tabId);
+    if (existingWinId != null) {
+      try {
+        await chrome.windows.update(existingWinId, { focused: true });
+        return;
+      } catch (_) {
+        // Stale mapping; clean it and recreate
+        popupWindowsByTab.delete(tabId);
+        tabIdByPopupWindow.delete(existingWinId);
+      }
+    }
+
+    const created = await chrome.windows.create({
+      url: chrome.runtime.getURL("popup.html"),
+      type: "popup",
+      width: 460,
+      height: 720,
+    });
+    const winId = created?.id ?? null;
+    if (winId != null) {
+      popupWindowsByTab.set(tabId, winId);
+      tabIdByPopupWindow.set(winId, tabId);
+    }
+  } catch (err) {
+    console.error("Failed to open/focus popup for tab", tabId, err);
+  }
 }
 
-chrome.action.onClicked.addListener(() => {
-  openOrFocusPopupWindow().catch((err) =>
+chrome.action.onClicked.addListener((tab) => {
+  const tabId = tab?.id ?? null;
+  openOrFocusPopupWindowForTab(tabId).catch((err) =>
     console.error("Failed to open ATS popup window", err)
   );
 });
 
-chrome.windows.onRemoved.addListener((id) => {
-  if (id === popupWindowId) popupWindowId = null;
+chrome.windows.onRemoved.addListener((windowId) => {
+  const tabId = tabIdByPopupWindow.get(windowId);
+  if (tabId != null) {
+    popupWindowsByTab.delete(tabId);
+    tabIdByPopupWindow.delete(windowId);
+  }
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const winId = popupWindowsByTab.get(tabId);
+  if (winId != null) {
+    try { await chrome.windows.remove(winId); } catch (_) {}
+    popupWindowsByTab.delete(tabId);
+    tabIdByPopupWindow.delete(winId);
+  }
 });
 
 async function mergePopupState(partial, { token, overwrite = false } = {}) {
@@ -445,7 +493,7 @@ You are an AI assistant that refines resume skill sections to match a job descri
 - Each object must have this structure: { "op": "replace_skill_csv", "label": "string", "csv": "string" }
 
 ## PROCESSING LOGIC
-1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, determine the most appropriate skill line and add the skill to that line's CSV somewhere in the middle. Do not duplicate it and add only 80% of words from required skill line if there are more than 5 in total.
+1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, determine the most appropriate skill line and add the skill to that line's CSV (strictly somewhere in the middle don't append to end). Do not duplicate it and add only 80% of words from required skill line if there are more than 5 in total. If a mandatory skill is too generic or non-technical (e.g., "debugging") and does not situate nicely into any of the seven labels, rely on judgment and skip inserting it rather than diluting the skill section with low-value entries.
 2. **Refine Existing Skills**: Analyze the job description and subtly re-order or adjust existing skills to align with the job's priorities.
 3. **Maintain Original Labels**: Keep the original 'label' for each skill line.
 4. Do **not** delete existing entries; even if something is only loosely related, leave it in place and focus on reordering or appending relevant additions instead of pruning.
@@ -466,7 +514,7 @@ ${skillsDump}`.trim();
       temperature: 0,
       topP: 0.7,
       thinkingConfig: {
-        thinkingBudget: 1400,
+        thinkingBudget: 2000,
       },
       maxOutputTokens: 4000,
     },
@@ -493,28 +541,28 @@ ${skillsDump}`.trim();
 
 async function geminiExtractMissing(apikey, jd, userKeywords = []) {
   const prompt = `
-You are an expert ATS keyword extractor. Your sole purpose is to generate a single, valid JSON object based on the provided Job Description (JD) and a list of user-supplied keywords.
+You are an expert ATS keyword extractor. Return one raw JSON object derived from the Job Description (JD) and the user keywords.
 
-## TASK
-Analyze the JD and identify technical skills and other important keywords that are present in the JD but *absent* from the user-supplied keyword list.
+TASK
+List the technical skills and important keywords present in the JD that the user list lacks.
 
-## JSON OUTPUT SPECIFICATION
-Your entire response MUST be a single raw JSON object.
+strictly follow the json strcutureJSON OUTPUT SPECIFICATION
 { "skills": ["string"], "important": ["string"] }
 
-### Key Descriptions:
-- **skills**: An array of exactly between 4 to 12 strictly technical skills (frameworks, tools, databases) from the JD, not in the user's list.
-- **important**: An array of up to 12 high-impact keywords (methodologies, qualifications like "performance optimization", "CI/CD pipelines") from the JD do not extract keyword which are non technical or pay/wage related.
+Key descriptions:
+- **skills**: Provide 4–10 technical items (frameworks, tools, databases) from the JD; omit course names and vague buzzwords, and limit development-practice entries to three intentional phrases (e.g., “CI/CD pipelines”).
+- **important**: Up to 10 high-impact keywords (methodologies, practices); exclude non-technical terms, academic degrees, leadership language, or compensation.
 
-## RULES
-1. **Strict Exclusion**: Keywords in the output MUST NOT be in the "User-Supplied Keywords" list.
-2. **JD Source Only**: Keywords MUST appear verbatim in the "JD Text".
-3. **Limit**: Do not exceed 12 items per array.
+RULES
+1. Keywords must be absent from the user-supplied list.
+2. Keywords must appear verbatim in the JD text.
+3. Each array cannot exceed 12 items.
+4. Discard academic credentials, mission/leadership language, and compensation references; keep only technical nouns or methodologies.
 
-## INPUTS
-### JD Text:
+INPUTS
+JD Text:
 ${jd.slice(0, 8000)}
-### User-Supplied Keywords:
+User-Supplied Keywords:
 ${(userKeywords || []).join(", ")}`.trim();
 
   const payload = {
@@ -559,6 +607,7 @@ function collectResumeSkillKeywords(tex) {
     "Cloud & DevOps",
     "Development Practices",
     "Certifications",
+    "Course Work",
   ];
   const seen = new Set();
   const ordered = [];
@@ -591,7 +640,7 @@ async function geminiPlan(
   } = {}
 ) {
   const MIN_CHARS = 215;
-  const MAX_CHARS = 228;
+  const MAX_CHARS = 225;
 
   const formatHint =
     GEMINI_BULLET_FORMAT === "LATEX"
@@ -1211,6 +1260,7 @@ let finalLatex = applyOps(latex, bulletOps);
       "Cloud & DevOps",
       "Development Practices",
       "Certifications",
+      "Course Work",
     ];
     const skills = {};
     for (const lab of skillLabels) {
