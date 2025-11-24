@@ -1,100 +1,551 @@
 <!doctype html>
 <html>
+
 <head>
   <meta charset="utf-8" />
   <title>ATS Resume Enhancer</title>
   <style>
-  :root { --bg:#0b1b2b; --card:#13273b; --accent:#2eaadc; --muted:#a7c2d9; --text:#eaf6ff; --radius:14px; }
-  body { font-family: Inter, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); width: 420px;}
-  .wrap { padding: 16px; }
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-  }
-  h3 { margin: 0; }
-  .close-btn {
-    border: none;
-    background: rgba(255,255,255,0.08);
-    color: var(--text);
-    padding: 6px 10px;
-    border-radius: 8px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-  .close-btn:hover {
-    background: rgba(255,255,255,0.15);
-  }
-  p.muted { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
-  .card { background: var(--card); border-radius: var(--radius); padding: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.2); }
-  label { font-size: 12px; color: var(--muted); display: block; margin: 12px 0 6px; }
-  input, textarea, select {
-    width: 100%;
-    box-sizing:border-box;
-    border: 1px solid #0f2235;
-    background: #0f2235;
-    color: var(--text);
-    padding: 10px;
-    border-radius: 10px;
-    font-family: inherit;
-    font-size: 13px;
-  }
-  /* Bigger job description box */
-  #jd {
-    min-height: 180px;
-    resize: vertical;
-    font-size: 14px;
-    line-height: 1.4;
-  }
-  button { border: none; background: var(--accent); color: #05202b; padding: 10px 14px; border-radius: 10px; font-weight: 600; cursor: pointer; }
-  button.ghost { background:transparent; border:1px solid rgba(255,255,255,.15); color:var(--text); }
-  a.link { display: none; padding: 10px 14px; border-radius: 10px; background: #0f2235; color: var(--text); text-decoration: none; border: 1px solid rgba(255,255,255,.1); }
-  .status { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
-  .scroll-area { padding: 5px; max-height: 150px; overflow-y: auto; }
-  .button-row { display:flex; gap:8px; margin-top:10px; align-items:center; }
-  .button-row .ghost { margin-left:auto; }
-  .required { color:#ffb3b3; }
-  #projectSelection label { display: block; margin: 4px 0; font-size: 13px; color: var(--text); }
-</style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --input-bg: #334155;
+      --border: #475569;
+      --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --radius: 12px;
+      --focus-ring: rgba(56, 189, 248, 0.5);
+    }
 
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      width: 450px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .wrap {
+      padding: 20px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    h3 {
+      margin: 0;
+      font-weight: 700;
+      font-size: 18px;
+      background: linear-gradient(to right, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.02em;
+    }
+
+    .close-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .close-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    p.muted {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      display: block;
+      margin: 16px 0 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      padding: 12px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 14px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--focus-ring);
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+
+    #jd,
+    #clCompanyDetails,
+    #clJd {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.6;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: var(--input-bg);
+      padding: 4px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      background: var(--card);
+      color: var(--accent);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--text);
+    }
+
+    /* Buttons */
+    button.primary {
+      border: none;
+      background: linear-gradient(135deg, var(--accent), #2563eb);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: transform 0.1s, box-shadow 0.2s;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    }
+
+    button.primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4);
+    }
+
+    button.primary:active {
+      transform: translateY(0);
+    }
+
+    button.primary:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      align-items: center;
+    }
+
+    .link-btn {
+      display: none;
+      /* Hidden by default */
+      text-align: center;
+      padding: 12px 20px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      transition: background 0.2s;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      flex: 1;
+    }
+
+    .link-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 6px;
+      transition: color 0.2s;
+    }
+
+    .icon-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .status {
+      font-size: 13px;
+      color: var(--accent);
+      min-height: 20px;
+      margin-top: 12px;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .scroll-area {
+      padding: 8px;
+      max-height: 160px;
+      overflow-y: auto;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .required {
+      color: #f43f5e;
+    }
+
+    #projectSelection label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      text-transform: none;
+      font-weight: 400;
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      padding: 12px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 14px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--focus-ring);
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+
+    #jd,
+    #clCompanyDetails,
+    #clJd {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.6;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: var(--input-bg);
+      padding: 4px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      background: var(--card);
+      color: var(--accent);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--text);
+    }
+
+    /* Buttons */
+    button.primary {
+      border: none;
+      background: linear-gradient(135deg, var(--accent), #2563eb);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: transform 0.1s, box-shadow 0.2s;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    }
+
+    button.primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4);
+    }
+
+    button.primary:active {
+      transform: translateY(0);
+    }
+
+    button.primary:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      align-items: center;
+    }
+
+    .link-btn {
+      display: none;
+      /* Hidden by default */
+      text-align: center;
+      padding: 12px 20px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      transition: background 0.2s;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      flex: 1;
+    }
+
+    .link-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 6px;
+      transition: color 0.2s;
+    }
+
+    .icon-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .status {
+      font-size: 13px;
+      color: var(--accent);
+      min-height: 20px;
+      margin-top: 12px;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .scroll-area {
+      padding: 8px;
+      max-height: 160px;
+      overflow-y: auto;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .required {
+      color: #f43f5e;
+    }
+
+    #projectSelection label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      text-transform: none;
+      font-weight: 400;
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+  </style>
 </head>
+
 <body>
   <div class="wrap">
     <div class="header">
       <h3>ATS Resume Enhancer</h3>
-      <button id="closePopup" class="close-btn" type="button" title="Close this window">Close</button>
     </div>
     <p class="muted">Select a category and projects to build your resume.</p>
     <div class="card">
-      <div class="form-fields">
-        <label for="categorySelect">1. Select a Resume Category</label>
-        <select id="categorySelect"><option>Loading...</option></select>
+      <div class="tabs">
+        <button id="tabResume" class="tab-btn active">Resume</button>
+        <button id="tabCoverLetter" class="tab-btn">Cover Letter</button>
+      </div>
 
-        <label for="projectSelection">2. Select Projects to Include</label>
-        <div id="projectSelection" class="scroll-area">
-          <p class="muted">Select a category first.</p>
+      <!-- RESUME TAB -->
+      <div id="resumeView">
+        <div class="form-fields">
+          <label for="categorySelect">1. Select a Resume Category</label>
+          <select id="categorySelect">
+            <option>Loading...</option>
+          </select>
+
+          <label for="projectSelection">2. Select Projects to Include</label>
+          <div id="projectSelection" class="scroll-area">
+            <p class="muted">Select a category first.</p>
+          </div>
+
+          <label for="company">3. Company Name <span class="required">*</span></label>
+          <input id="company" type="text" placeholder="e.g. Stripe" required>
+
+          <label for="jd">4. Job Description</label>
+          <textarea id="jd" placeholder="Paste the full JD..."></textarea>
+
+          <label for="prompt">5. Rewrite Prompt (optional)</label>
+          <textarea id="prompt" placeholder="e.g., Emphasize my cloud experience..."></textarea>
         </div>
 
-        <label for="company">3. Company Name <span class="required">*</span></label>
-        <input id="company" type="text" placeholder="e.g. Stripe" required>
-        
-        <label for="jd">4. Job Description</label>
-        <textarea id="jd" placeholder="Paste the full JD..."></textarea>
-
-        <label for="prompt">5. Rewrite Prompt (optional)</label>
-        <textarea id="prompt" placeholder="e.g., Emphasize my cloud experience..."></textarea>
+        <div class="button-row">
+          <button id="generate" class="primary" type="button">Generate Resume</button>
+          <a id="downloadPdf" class="link-btn" download="vipul_charugundla.pdf">Download PDF</a>
+          <button id="openSettings" class="icon-btn" type="button" title="Settings">⚙️</button>
+        </div>
       </div>
 
-      <div class="button-row">
-        <button id="generate" type="button">Generate</button>
-        <a id="downloadPdf" class="link" download="vipul_charugundla.pdf">Download PDF</a>
-        <button id="openSettings" class="ghost" type="button">Settings</button>
+      <!-- COVER LETTER TAB -->
+      <div id="coverLetterView" style="display:none;">
+        <div class="form-fields">
+          <label>1. Role (Synced from Resume)</label>
+          <input id="clRole" type="text" disabled placeholder="Select a category in Resume tab">
+
+          <label for="clCompanyDetails">2. Company Details (New)</label>
+          <textarea id="clCompanyDetails"
+            placeholder="Enter details about the company, values, mission, etc..."></textarea>
+
+          <label>3. Job Description (Synced)</label>
+          <textarea id="clJd" placeholder="Synced from Resume tab or paste here..."
+            style="min-height:100px;"></textarea>
+        </div>
+
+        <div class="button-row">
+          <button id="generateCoverLetter" class="primary" type="button">Generate Cover Letter</button>
+          <a id="downloadCoverLetter" class="link-btn">Download PDF</a>
+          <button id="copyCoverLetter" class="link-btn" type="button" style="display:none;">Copy Text</button>
+        </div>
       </div>
+
       <div id="status" class="status"></div>
     </div>
   </div>
   <script src="popup.js"></script>
 </body>
+
 </html>

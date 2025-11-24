@@ -5,6 +5,7 @@
 
   const POPUP_STATE_KEY = "popupState";
   const DEFAULT_STATE = {
+    activeTab: "resume", // "resume" or "coverLetter"
     company: "",
     jd: "",
     prompt: "",
@@ -13,11 +14,17 @@
     pdfB64: "",
     pdfFilename: "",
     status: "",
-    generationInBackground: false
+    generationInBackground: false,
+    // Cover Letter specific
+    clCompanyDetails: "",
+    clPdfB64: "",
+    clPdfFilename: "",
+    clText: ""
   };
 
   let popupState = { ...DEFAULT_STATE };
   let currentBlobUrl = "";
+  let currentClBlobUrl = "";
   let persistTimer = 0;
 
   const hide = (el) => {
@@ -31,6 +38,13 @@
       URL.revokeObjectURL(currentBlobUrl);
     }
     currentBlobUrl = "";
+  };
+
+  const revokeClBlobUrl = () => {
+    if (currentClBlobUrl && currentClBlobUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(currentClBlobUrl);
+    }
+    currentClBlobUrl = "";
   };
 
   const persistState = (immediate = false) => {
@@ -98,24 +112,28 @@
       .join("");
   };
 
-  const hydratePdfLink = (pdfLink) => {
+  const hydratePdfLink = (pdfLink, b64, filename, isCl = false) => {
     if (!pdfLink) return;
-    revokeBlobUrl();
-    if (!popupState.pdfB64) {
+    if (isCl) revokeClBlobUrl(); else revokeBlobUrl();
+
+    if (!b64) {
       hide(pdfLink);
       return;
     }
 
     try {
-      const bytes = Uint8Array.from(atob(popupState.pdfB64), (c) => c.charCodeAt(0));
-      currentBlobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-      pdfLink.href = currentBlobUrl;
-      pdfLink.download = popupState.pdfFilename || "Vipul_Charugundla_generated.pdf";
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      if (isCl) currentClBlobUrl = blobUrl; else currentBlobUrl = blobUrl;
+
+      pdfLink.href = blobUrl;
+      pdfLink.download = filename || (isCl ? "Cover_Letter.pdf" : "Resume.pdf");
       pdfLink.style.display = "inline-block";
     } catch (err) {
       console.error("Failed to restore PDF from state", err);
       hide(pdfLink);
-      updateState({ pdfB64: "", pdfFilename: "" });
+      if (isCl) updateState({ clPdfB64: "", clPdfFilename: "" });
+      else updateState({ pdfB64: "", pdfFilename: "" });
     }
   };
 
@@ -125,6 +143,47 @@
       (el) => el.value
     );
     updateState({ selectedProjectIds: ids });
+  };
+
+  const clRoleInput = $("clRole");
+  const clJdInput = $("clJd");
+
+  const switchTab = (tabName) => {
+    const resumeView = $("resumeView");
+    const coverLetterView = $("coverLetterView");
+    const tabResume = $("tabResume");
+    const tabCoverLetter = $("tabCoverLetter");
+
+    if (tabName === "coverLetter") {
+      resumeView.style.display = "none";
+      coverLetterView.style.display = "block";
+      tabResume.classList.remove("active");
+      tabCoverLetter.classList.add("active");
+
+      // Always sync Role from current category
+      const cat = DB.categories.find(c => c.id === popupState.categoryId);
+      if (cat) {
+        clRoleInput.value = cat.name;
+        updateState({ clRole: cat.name });
+      } else {
+        clRoleInput.value = "No Category Selected";
+        updateState({ clRole: "" });
+      }
+
+      if (!popupState.clJd) {
+        if (popupState.jd) {
+          clJdInput.value = popupState.jd;
+          updateState({ clJd: popupState.jd });
+        }
+      }
+
+    } else {
+      resumeView.style.display = "block";
+      coverLetterView.style.display = "none";
+      tabResume.classList.add("active");
+      tabCoverLetter.classList.remove("active");
+    }
+    updateState({ activeTab: tabName });
   };
 
   document.addEventListener("DOMContentLoaded", async () => {
@@ -140,7 +199,15 @@
     const projectContainer = $("projectSelection");
     const pdfLink = $("downloadPdf");
     const generateBtn = $("generate");
-    const closeBtn = $("closePopup");
+    // Close button removed
+
+    // Cover Letter Elements
+    const tabResume = $("tabResume");
+    const tabCoverLetter = $("tabCoverLetter");
+    const clCompanyDetails = $("clCompanyDetails");
+    const generateClBtn = $("generateCoverLetter");
+    const clPdfLink = $("downloadCoverLetter");
+    const copyClBtn = $("copyCoverLetter");
 
     await loadPopupState();
 
@@ -148,11 +215,17 @@
       companyInput.value = popupState.company || "";
       jdInput.value = popupState.jd || "";
       promptInput.value = popupState.prompt || "";
+      clCompanyDetails.value = popupState.clCompanyDetails || "";
+      clRoleInput.value = popupState.clRole || "";
+      clJdInput.value = popupState.clJd || "";
 
       const validCategory = DB.categories.some((cat) => cat.id === popupState.categoryId);
       if (validCategory) {
         categorySelect.value = popupState.categoryId;
         populateProjects(popupState.categoryId);
+        // Ensure clRole is synced on load
+        const cat = DB.categories.find(c => c.id === popupState.categoryId);
+        if (cat) clRoleInput.value = cat.name;
       } else {
         categorySelect.value = "";
         projectContainer.innerHTML = `<p class="muted">Select a category first.</p>`;
@@ -175,16 +248,21 @@
       }
 
       statusEl.textContent = popupState.status || "";
+      switchTab(popupState.activeTab || "resume");
+
+      if (popupState.clText) {
+        copyClBtn.style.display = "inline-block";
+      } else {
+        copyClBtn.style.display = "none";
+      }
     };
 
     applyStateToDom();
-    hydratePdfLink(pdfLink);
+    hydratePdfLink(pdfLink, popupState.pdfB64, popupState.pdfFilename);
+    hydratePdfLink(clPdfLink, popupState.clPdfB64, popupState.clPdfFilename, true);
 
-    if (closeBtn) {
-      closeBtn.addEventListener("click", () => {
-        window.close();
-      });
-    }
+    tabResume.addEventListener("click", () => switchTab("resume"));
+    tabCoverLetter.addEventListener("click", () => switchTab("coverLetter"));
 
     categorySelect.addEventListener("change", (e) => {
       const catId = e.target.value;
@@ -198,6 +276,14 @@
             box.checked = true;
           });
         syncSelectedProjects();
+
+        // Always sync role to CL
+        const cat = DB.categories.find(c => c.id === catId);
+        if (cat) {
+          updateState({ clRole: cat.name });
+          clRoleInput.value = cat.name;
+        }
+
       } else {
         projectContainer.innerHTML = `<p class="muted">Select a category first.</p>`;
         updateState({ selectedProjectIds: [] });
@@ -223,6 +309,14 @@
     handleInput(companyInput, "company");
     handleInput(jdInput, "jd");
     handleInput(promptInput, "prompt");
+    handleInput(clCompanyDetails, "clCompanyDetails");
+    handleInput(clJdInput, "clJd");
+
+    // Always sync JD to CL when Resume JD changes
+    jdInput.addEventListener("input", () => {
+      updateState({ clJd: jdInput.value });
+      clJdInput.value = jdInput.value;
+    });
 
     // Dual-download binding to keep two filenames in sync
     if (pdfLink && !pdfLink.dataset.dual) {
@@ -249,6 +343,23 @@
         triggerDownload(secondName);
       });
       pdfLink.dataset.dual = "1";
+    }
+
+    if (copyClBtn) {
+      copyClBtn.addEventListener("click", () => {
+        if (popupState.clText) {
+          navigator.clipboard.writeText(popupState.clText).then(() => {
+            const originalText = copyClBtn.textContent;
+            copyClBtn.textContent = "Copied!";
+            setTimeout(() => {
+              copyClBtn.textContent = originalText;
+            }, 2000);
+          }).catch(err => {
+            console.error("Failed to copy text: ", err);
+            statusEl.textContent = "Failed to copy text.";
+          });
+        }
+      });
     }
 
     generateBtn.addEventListener("click", async () => {
@@ -351,6 +462,111 @@
       } finally {
         generateBtn.disabled = false;
         generateBtn.textContent = prevText;
+      }
+    });
+
+    generateClBtn.addEventListener("click", async () => {
+      const company = companyInput.value.trim();
+      const jd = clJdInput.value.trim(); // Use the CL JD input
+      const categoryId = categorySelect.value;
+      const clDetails = clCompanyDetails.value.trim();
+      const selectedProjectIds = Array.from(
+        document.querySelectorAll(".project-checkbox:checked"),
+        (el) => el.value
+      );
+
+      if (!categoryId) {
+        statusEl.textContent = "Please select a category in Resume tab.";
+        updateState({ status: statusEl.textContent }, { flush: true });
+        return;
+      }
+      if (!company) {
+        statusEl.textContent = "Please enter a Company Name in Resume tab.";
+        updateState({ status: statusEl.textContent }, { flush: true });
+        return;
+      }
+      if (!jd) {
+        statusEl.textContent = "Please paste a Job Description.";
+        updateState({ status: statusEl.textContent }, { flush: true });
+        return;
+      }
+
+      revokeClBlobUrl();
+      hide(clPdfLink);
+      hide(copyClBtn);
+
+      const prevText = generateClBtn.textContent;
+      generateClBtn.disabled = true;
+      generateClBtn.textContent = "Working...";
+      statusEl.textContent = "Generating Cover Letter...";
+      updateState(
+        {
+          status: statusEl.textContent,
+          clCompanyDetails: clDetails,
+          clPdfB64: "",
+          clPdfFilename: "",
+          clText: "",
+          generationInBackground: true
+        },
+        { flush: true }
+      );
+
+      try {
+        const resp = await chrome.runtime.sendMessage({
+          type: "PROCESS_COVER_LETTER",
+          payload: {
+            jd,
+            company,
+            clDetails,
+            categoryId,
+            selectedProjectIds
+          }
+        });
+
+        if (!resp || !resp.pdfB64) {
+          statusEl.textContent = "Cover Letter generation failed. See console.";
+          updateState(
+            { status: statusEl.textContent, clPdfB64: "", clPdfFilename: "" },
+            { flush: true }
+          );
+          return;
+        }
+
+        const bytes = Uint8Array.from(atob(resp.pdfB64), (c) => c.charCodeAt(0));
+        const pdfBlob = new Blob([bytes], { type: "application/pdf" });
+        revokeClBlobUrl();
+        currentClBlobUrl = URL.createObjectURL(pdfBlob);
+
+        clPdfLink.href = currentClBlobUrl;
+        const downloadName = `CoverLetter_Vipul_${company.replace(/\s+/g, "_")}.pdf`;
+        clPdfLink.download = downloadName;
+        clPdfLink.style.display = "inline-block";
+
+        copyClBtn.style.display = "inline-block";
+
+        statusEl.textContent = "Cover Letter ready!";
+
+        updateState(
+          {
+            clPdfB64: resp.pdfB64,
+            clPdfFilename: downloadName,
+            clText: resp.coverLetterText,
+            status: statusEl.textContent,
+            generationInBackground: false
+          },
+          { flush: true }
+        );
+      } catch (err) {
+        console.error(err);
+        const message = err?.message || "Unexpected error. See console.";
+        statusEl.textContent = message;
+        updateState(
+          { clPdfB64: "", clPdfFilename: "", clText: "", status: message, generationInBackground: false },
+          { flush: true }
+        );
+      } finally {
+        generateClBtn.disabled = false;
+        generateClBtn.textContent = prevText;
       }
     });
 

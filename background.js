@@ -109,7 +109,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const winId = popupWindowsByTab.get(tabId);
   if (winId != null) {
-    try { await chrome.windows.remove(winId); } catch (_) {}
+    try { await chrome.windows.remove(winId); } catch (_) { }
     popupWindowsByTab.delete(tabId);
     tabIdByPopupWindow.delete(winId);
   }
@@ -432,7 +432,7 @@ async function robustGeminiParse(resp) {
   try {
     const direct = JSON.parse(raw);
     if (direct?.ops && Array.isArray(direct.ops)) return direct;
-  } catch (_) {}
+  } catch (_) { }
 
   // 2) Our sanitizer
   const parsed = safeJsonFromGemini(raw);
@@ -570,7 +570,7 @@ ${(userKeywords || []).join(", ")}`.trim();
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0,
-      
+
       maxOutputTokens: 6000,
     },
   };
@@ -651,7 +651,7 @@ async function geminiPlan(
   const verified = (inResumeKeywords || []).filter(Boolean).slice(0, 160).join(", ");
 
 
-const refinedPolicy = `
+  const refinedPolicy = `
 You are an experimental AI resume editor. Rewrite every bullet so it reads as though the candidate already operates inside the Job Description (JD) environment, even when that requires introducing JD technologies or terminology that never appeared in the original resume.
 
 ## Core Rules: Non-Negotiable
@@ -697,36 +697,36 @@ You are an experimental AI resume editor. Rewrite every bullet so it reads as th
   const schema =
     'RETURN ONLY THIS EXACT JSON (no extra text, no code fences, no trailing characters):\n{"ops":[{"op":"replace_bullets","section":"Section Name","bullets":["...", "..."]}]}';
 
-const responseSchema = {
-  type: "object",
-  properties: {
-    ops: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          op: { type: "string", enum: ["replace_bullets", "replace"] },
-          section: { type: "string" },
-          bullets: {
-            type: "array",
-            items: { type: "string" }
-          }
-        },
-        required: ["op", "section", "bullets"]
+  const responseSchema = {
+    type: "object",
+    properties: {
+      ops: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            op: { type: "string", enum: ["replace_bullets", "replace"] },
+            section: { type: "string" },
+            bullets: {
+              type: "array",
+              items: { type: "string" }
+            }
+          },
+          required: ["op", "section", "bullets"]
+        }
       }
-    }
-  },
-  required: ["ops"]
-};
+    },
+    required: ["ops"]
+  };
 
 
- const payload = {
-  contents: [
-    {
-      role: "user",
-      parts: [
-        {
-          text: `
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `
 ${refinedPolicy}
 ${instructionBlock}
 ## INPUTS
@@ -746,19 +746,19 @@ ${sectionsDump}
 [${windowReminder}]
 
 Return JSON only.`.trim(),
-        },
-      ],
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema,                // ⬅️ moved here
+      temperature: 0.15,
+      topP: 0.8,
+      thinkingConfig: { thinkingBudget: 4400 },
+      maxOutputTokens: 8000,
     },
-  ],
-  generationConfig: {
-    responseMimeType: "application/json",
-    responseSchema,                // ⬅️ moved here
-    temperature: 0.15,
-    topP: 0.8,
-    thinkingConfig: { thinkingBudget: 4400 },
-    maxOutputTokens: 8000,
-  },
-};
+  };
 
 
   const res = await fetch(
@@ -834,16 +834,16 @@ function getSectionBodyAndCount(tex, sectionName) {
   const escapedName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const rxSub = new RegExp(
     `(\\\\resumeSubheading\\s*\\{[\\s\\S]*?${escapedName}[\\s\\S]*?\\}[\\s\\S]*?` +
-      `\\\\begin\\{itemize\\}(?:\\[[^\\]]*\\])?)` +
-      `([\\s\\S]*?)` +
-      `(\\\\end\\{itemize\\})`,
+    `\\\\begin\\{itemize\\}(?:\\[[^\\]]*\\])?)` +
+    `([\\s\\S]*?)` +
+    `(\\\\end\\{itemize\\})`,
     "i"
   );
   const rxProj = new RegExp(
     `(\\\\resumeProjectHeading[\\s\\S]*?\\{[\\s\\S]*?${escapedName}[\\s\\S]*?\\}[\\s\\S]*?` +
-      `\\\\begin\\{itemize\\}(?:\\[[^\\]]*\\])?)` +
-      `([\\s\\S]*?)` +
-      `(\\\\end\\{itemize\\})`,
+    `\\\\begin\\{itemize\\}(?:\\[[^\\]]*\\])?)` +
+    `([\\s\\S]*?)` +
+    `(\\\\end\\{itemize\\})`,
     "i"
   );
 
@@ -986,16 +986,16 @@ function normalizeAIBulletsForSection(originalBulletsLive, aiBulletsRaw, format 
   const want = originalBulletsLive.length;
   let flat = (aiBulletsRaw || []).map(s => String(s ?? "").trim());
 
-  if (flat.length < want) flat = [...flat, ...Array.from({ length: want - flat.length }, (_ , i) => originalBulletsLive[flat.length + i] || "")];
+  if (flat.length < want) flat = [...flat, ...Array.from({ length: want - flat.length }, (_, i) => originalBulletsLive[flat.length + i] || "")];
   if (flat.length > want) flat = flat.slice(0, want);
 
   flat = flat.map((s, i) => (s ? s : (originalBulletsLive[i] || "")));
   flat = flat.map((nb, idx) => ensureMetricsPreserved(originalBulletsLive[idx] || "", nb));
 
   const finalize = (s) =>
-    (format === "LATEX"
-      ? String(s || "").replace(/\s*\(\d+\s+(?:words?|chars?|characters?)\)\s*$/i, "").replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "").replace(/\s{2,}/g, " ").trim()
-      : cleanBullet(s));
+  (format === "LATEX"
+    ? String(s || "").replace(/\s*\(\d+\s+(?:words?|chars?|characters?)\)\s*$/i, "").replace(/\s*\(retained metrics:[^)]+\)\s*$/i, "").replace(/\s{2,}/g, " ").trim()
+    : cleanBullet(s));
 
   return flat.map(finalize);
 }
@@ -1044,8 +1044,8 @@ function applyOps(tex, ops) {
           normalized.length === want
             ? normalized
             : (normalized.length > want
-                ? normalized.slice(0, want)
-                : [...normalized, ...originals.slice(normalized.length, want)]);
+              ? normalized.slice(0, want)
+              : [...normalized, ...originals.slice(normalized.length, want)]);
 
         if (finalBullets.length !== want) {
           console.warn(`[guard] Bullet count mismatch resolved for section "${sec.name}". want=${want}, got=${finalBullets.length}`);
@@ -1125,7 +1125,7 @@ async function compileToPdf(texSource, clsContent = "") {
     const snippet = log.slice(firstIdx, Math.min(firstIdx + 1500, log.length));
     throw new Error(
       "LaTeX compile failed. See console for full log.\n\nERROR SNIPPET:\n" +
-        snippet
+      snippet
     );
   }
 
@@ -1141,9 +1141,224 @@ function arrayBufferToBase64(buf) {
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Main message handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+
+async function geminiGenerateCoverLetter(apikey, company, jd, companyDetails, resumeLatex) {
+  const prompt = `
+You are an expert career coach and professional writer. Write a compelling, personalized cover letter for the role at ${company}.
+
+## INPUTS
+### Job Description:
+${jd.slice(0, 5000)}
+
+### Company Details / Mission / Values:
+${companyDetails}
+
+### Candidate's Resume (LaTeX source):
+${resumeLatex.slice(0, 8000)}
+
+## INSTRUCTIONS
+1.  **Tone**: **Highly conversational, human, and authentic.** Avoid stiff, formal, or robotic "AI-sounding" language. Write as if you are a passionate individual speaking directly to the team. Use varied sentence structure and natural phrasing. Do not use overused buzzwords.
+2.  **Structure**:
+    *   **Opening**: Hook the reader immediately. State the role and express genuine excitement, mentioning specific company values or details provided.
+    *   **Body Paragraph 1**: Tell a story about relevant experience from the resume that matches the JD's core requirements. Focus on impact.
+    *   **Body Paragraph 2**: Connect the candidate's skills/projects to the company's mission or specific challenges mentioned in the JD or Company Details. Show you've done your homework.
+    *   **Closing**: Reiterate enthusiasm and request an interview naturally.
+3.  **Format**: Return **ONLY the body text** of the letter (paragraphs).
+    *   **DO NOT** include the header (name, address, date).
+    *   **DO NOT** include the recipient address block.
+    *   **DO NOT** include the salutation (e.g., "Dear..."). This is handled externally.
+    *   **DO NOT** include the signature line (Sincerely, Name).
+4.  **Content**: Do not invent experiences. Use the provided resume content.
+5.  **Length**: Keep it concise (approx. 250-350 words).
+
+Return the body text as plain text. Do not use Markdown or LaTeX syntax in the output.
+`.trim();
+
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.85, // Increased for more creativity/human-like variance
+      maxOutputTokens: 1000,
+    },
+  };
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(
+      apikey
+    )}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Gemini Cover Letter API error: ${res.status}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  return text.trim();
+}
+
 // IMPORTANT: Exactly one listener; no duplicates.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg?.type) return;
+
+  if (msg.type === "PROCESS_COVER_LETTER") {
+    let generationToken = null;
+    (async () => {
+      const { jd, company, clDetails, categoryId, selectedProjectIds } = msg.payload || {};
+      const { resumeData: DB } = await chrome.storage.local.get("resumeData");
+
+      if (!DB?.apikey) throw new Error("Missing API key in Options.");
+      const category = DB.categories.find((c) => c.id === categoryId);
+      if (!category || !category.latex)
+        throw new Error("Selected category not found or has no LaTeX template.");
+
+      generationToken = `gen_cl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      await mergePopupState({
+        generationToken,
+        generationStartedAt: Date.now(),
+        status: "Planning + Writing Cover Letter...",
+        clPdfB64: "",
+        clPdfFilename: "",
+        generationInBackground: true,
+      });
+
+      // 1. Prepare Resume Context (inject projects into latex for context)
+      let latex = category.latex;
+      const selectedProjects = (DB.projects || []).filter((p) =>
+        (selectedProjectIds || []).includes(p.id)
+      );
+      const projectLatexStrings = selectedProjects
+        .map((p) => {
+          const bullets = (p.bullets || []).map((b) => `  \\item ${b}`).join("\n");
+          return `Project: ${p.name}\nBullets:\n${bullets}`;
+        })
+        .join("\n\n");
+
+      // We don't need to inject perfectly into LaTeX for the prompt, just appending is enough for context
+      // But let's try to use the injection logic if we want to be precise, or just append projects to the text sent to Gemini.
+      // The prompt uses `resumeLatex`. I'll append the selected projects to it so Gemini sees them.
+      const resumeContext = latex + "\n\nSelected Projects Details:\n" + projectLatexStrings;
+
+      // 2. Generate Cover Letter Content
+      // User requested "gemini-2.5-flash-lite" (based on existing code usage).
+      // I will use the function I defined above which uses the model.
+      // Wait, I need to make sure I use the right model name.
+      // In the file, line 524 uses `gemini-2.5-flash-lite`. I will use that.
+
+      const bodyText = await geminiGenerateCoverLetter(DB.apikey, company, jd, clDetails, resumeContext);
+
+      // 3. Wrap in LaTeX Template
+      const escapedBody = escapeLatex(bodyText).replace(/\n\n/g, "\\par\\vspace{10pt}\n");
+
+      const clTemplate = `\\documentclass[letterpaper,11pt]{article}
+\\usepackage{latexsym}
+\\usepackage[empty]{fullpage}
+\\usepackage{titlesec}
+\\usepackage{marvosym}
+\\usepackage[usenames,dvipsnames]{color}
+\\usepackage{verbatim}
+\\usepackage{enumitem}
+\\usepackage[hidelinks]{hyperref}
+\\usepackage{fancyhdr}
+\\usepackage[english]{babel}
+\\usepackage{tabularx}
+\\input{glyphtounicode}
+\\pagestyle{fancy}
+\\fancyhf{} 
+\\fancyfoot{}
+\\renewcommand{\\headrulewidth}{0pt}
+\\renewcommand{\\footrulewidth}{0pt}
+\\addtolength{\\oddsidemargin}{-0.5in}
+\\addtolength{\\evensidemargin}{-0.5in}
+\\addtolength{\\textwidth}{1in}
+\\addtolength{\\topmargin}{-.5in}
+\\addtolength{\\textheight}{1.0in}
+\\urlstyle{same}
+\\raggedbottom
+\\raggedright
+\\setlength{\\tabcolsep}{0in}
+
+\\begin{document}
+\\begin{center}
+    \\textbf{\\LARGE \\scshape Vipul Charugundla} \\\\ \\vspace{5pt}
+    Buffalo, New York $|$ (716) 710-7704 $|$ charugundlavipul@gmail.com \\\\
+    \\href{https://www.linkedin.com/in/charugundla-vipul-3911561aa/}{LinkedIn} $|$ \\href{https://github.com/Charugundlavipul}{GitHub} $|$ \\href{https://vipulcharugundla.netlify.app/}{Portfolio}
+\\end{center}
+\\vspace{0.3in}
+
+\\today
+
+\\vspace{0.2in}
+
+Dear ${escapeLatex(company)} Hiring Team,
+
+\\vspace{0.1in}
+
+${escapedBody}
+
+\\vspace{0.2in}
+
+Sincerely, \\\\
+Vipul Charugundla
+
+\\end{document}`;
+
+      // 3b. Construct Plain Text Version (for Copy Text)
+      const plainTextCoverLetter = `Vipul Charugundla
+Buffalo, New York | (716) 710-7704 | charugundlavipul@gmail.com
+LinkedIn (https://www.linkedin.com/in/charugundla-vipul-3911561aa/) | GitHub (https://github.com/Charugundlavipul) | Portfolio (https://vipulcharugundla.netlify.app/)
+
+${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+
+Dear ${company} Hiring Team,
+
+${bodyText}
+
+Sincerely,
+Vipul Charugundla`;
+
+      // 4. Compile
+      console.log("--- FINAL COVER LETTER LATEX ---\n", clTemplate);
+      const pdfBuf = await compileToPdf(clTemplate);
+      const pdfB64 = arrayBufferToBase64(pdfBuf);
+      const companySlug = (company || "").trim().replace(/\s+/g, "_") || "Generated";
+      const downloadName = `CoverLetter_Vipul_${companySlug}.pdf`;
+
+      await mergePopupState(
+        {
+          status: "Cover Letter ready!",
+          clPdfB64: pdfB64,
+          clPdfFilename: downloadName,
+          generationToken: null,
+          generationInBackground: false,
+        },
+        { token: generationToken }
+      );
+
+      sendResponse({ pdfB64, tex: clTemplate, coverLetterText: plainTextCoverLetter });
+
+    })().catch(async (err) => {
+      console.error("COVER LETTER FAILED:", err);
+      const message = err?.message || "Unexpected error.";
+      await mergePopupState(
+        {
+          status: message,
+          clPdfB64: "",
+          clPdfFilename: "",
+          generationToken: null,
+          generationInBackground: false,
+        },
+        { token: generationToken }
+      );
+      sendResponse({ error: message });
+    });
+    return true;
+  }
 
   if (msg.type !== "PROCESS_JD_PIPELINE") return;
 
@@ -1213,42 +1428,42 @@ ${bullets}
       }
     }
 
-   // --- 2) Refinement pipeline ---
-const apikey = DB.apikey;
+    // --- 2) Refinement pipeline ---
+    const apikey = DB.apikey;
 
-// Normalize category keywords (string or array)
-const categoryKeywords = Array.isArray(category.keywords)
-  ? category.keywords
-  : String(category.keywords || "")
-      .split(",")
-      .map(s => s.trim())
-      .filter(Boolean);
+    // Normalize category keywords (string or array)
+    const categoryKeywords = Array.isArray(category.keywords)
+      ? category.keywords
+      : String(category.keywords || "")
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
 
-// Extract JD gaps using category hints
-const { skillsMissing, importantMissing } = await geminiExtractMissing(
-  apikey,
-  jd,
-  categoryKeywords
-);
-console.log(" Extracted missing skills:", skillsMissing);
-console.log(" Extracted important missing keywords:", importantMissing);
+    // Extract JD gaps using category hints
+    const { skillsMissing, importantMissing } = await geminiExtractMissing(
+      apikey,
+      jd,
+      categoryKeywords
+    );
+    console.log(" Extracted missing skills:", skillsMissing);
+    console.log(" Extracted important missing keywords:", importantMissing);
 
-// Build targeting lists (JD-first so the model pivots aggressively to the JD)
-const inResumeKeywords = collectResumeSkillKeywords(latex); // from Skills section
-const targetKeywords = Array.from(
-  new Set([
-    ...skillsMissing,        // JD-derived, highest priority
-    ...importantMissing,     // JD-derived high-impact concepts
-    ...categoryKeywords,     // category hints, lowest priority
-  ])
-).filter(Boolean);
+    // Build targeting lists (JD-first so the model pivots aggressively to the JD)
+    const inResumeKeywords = collectResumeSkillKeywords(latex); // from Skills section
+    const targetKeywords = Array.from(
+      new Set([
+        ...skillsMissing,        // JD-derived, highest priority
+        ...importantMissing,     // JD-derived high-impact concepts
+        ...categoryKeywords,     // category hints, lowest priority
+      ])
+    ).filter(Boolean);
 
-// Pass 1: role-aware bullet rewrites (applies to Work Experience + Projects)
-const bulletOps = await geminiPlan(apikey, company, jd, prompt, latex, {
-  targetKeywords,
-  inResumeKeywords,
-});
-let finalLatex = applyOps(latex, bulletOps);
+    // Pass 1: role-aware bullet rewrites (applies to Work Experience + Projects)
+    const bulletOps = await geminiPlan(apikey, company, jd, prompt, latex, {
+      targetKeywords,
+      inResumeKeywords,
+    });
+    let finalLatex = applyOps(latex, bulletOps);
 
 
     // Pass 2: skills refinement
@@ -1316,4 +1531,5 @@ let finalLatex = applyOps(latex, bulletOps);
 
   return true; // keep the message channel open for async sendResponse
 });
+
 
