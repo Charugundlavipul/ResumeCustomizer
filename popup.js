@@ -9,6 +9,7 @@
     company: "",
     location: "",
     jd: "",
+    primaryLanguage: "",
     prompt: "",
     categoryId: "",
     selectedProjectIds: [],
@@ -196,6 +197,7 @@
     const companyInput = $("company");
     const locationInput = $("location");
     const jdInput = $("jd");
+    const primaryLanguageInput = $("primaryLanguage");
     const promptInput = $("prompt");
     const categorySelect = $("categorySelect");
     const projectContainer = $("projectSelection");
@@ -221,6 +223,7 @@
         updateState({ location: DB.location });
       }
       jdInput.value = popupState.jd || "";
+      primaryLanguageInput.value = popupState.primaryLanguage || "";
       promptInput.value = popupState.prompt || "";
       clCompanyDetails.value = popupState.clCompanyDetails || "";
       clRoleInput.value = popupState.clRole || "";
@@ -316,6 +319,7 @@
     handleInput(companyInput, "company");
     handleInput(locationInput, "location");
     handleInput(jdInput, "jd");
+    handleInput(primaryLanguageInput, "primaryLanguage");
     handleInput(promptInput, "prompt");
     handleInput(clCompanyDetails, "clCompanyDetails");
     handleInput(clJdInput, "clJd");
@@ -426,6 +430,7 @@
             jd,
             company,
             location,
+            primaryLanguage: primaryLanguageInput.value.trim(),
             prompt: promptInput.value.trim(),
             categoryId,
             selectedProjectIds

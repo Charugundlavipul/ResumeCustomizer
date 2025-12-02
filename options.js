@@ -138,9 +138,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // .cls file handling
       const clsContent = cat?.clsFileContent || "";
+      const clsName = cat?.clsFileName || (clsContent ? "fed-res.cls" : "");
       $("categoryClsContent").value = clsContent;
+      $("categoryClsFilename").value = clsName;
       if (clsContent) {
-        $("clsFileStatus").textContent = "fed-res.cls is already saved.";
+        const label = clsName || "fed-res.cls";
+        $("clsFileStatus").textContent = `${label} is already saved.`;
         $("uploadClsBtn").textContent = "Replace .cls File";
       } else {
         $("clsFileStatus").textContent = "No .cls file uploaded.";
@@ -214,18 +217,24 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!file) return;
       const text = await file.text();
       $("categoryClsContent").value = text;
+      $("categoryClsFilename").value = file.name;
+      $("uploadClsBtn").textContent = "Replace .cls File";
       $("clsFileStatus").textContent = `${file.name} ready to be saved.`;
     });
 
     // Category CRUD
     $("saveCategoryBtn").addEventListener("click", async () => {
       const id = $("categoryId").value || `cat-${Date.now()}`;
+      const clsContent = $("categoryClsContent").value.trim();
+      const clsNameInput = $("categoryClsFilename").value.trim();
+      const clsFileName = clsContent ? (clsNameInput || "fed-res.cls") : "";
       const newCat = {
         id,
         name: $("categoryName").value.trim(),
         keywords: $("categoryKeywords").value.split(',').map(k => k.trim()).filter(Boolean),
         latex: $("categoryLatex").value.trim(),
-        clsFileContent: $("categoryClsContent").value.trim(),
+        clsFileContent: clsContent,
+        clsFileName,
       };
       const index = DB.categories.findIndex(c => c.id === id);
       if (index > -1) {

@@ -493,11 +493,13 @@ You are an AI assistant that refines resume skill sections to match a job descri
 - Each object must have this structure: { "op": "replace_skill_csv", "label": "string", "csv": "string" }
 
 ## PROCESSING LOGIC
-1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, determine the most appropriate skill line and add the skill to that line's CSV (strictly somewhere in the middle don't append to end). Do not duplicate it and add only 80% of words from required skill line if there are more than 5 in total. If a mandatory skill is too generic or non-technical (e.g., "debugging") and does not situate nicely into any of the seven labels, rely on judgment and skip inserting it rather than diluting the skill section with low-value entries.
+1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, add it ONLY if it clearly fits the chosen skill line. For the labels "Programming Languages", "Frameworks & Libraries", "Databases", "Tools", and "Cloud & DevOps", triple-check relevance and skip any generic or irrelevant skills instead of forcing them in.  Insert the skill somewhere in the middle (not appended), avoid duplicates, and if the skill text has more than 4 words, include only the most meaningful ~80% of its words.
 2. **Refine Existing Skills**: Analyze the job description and subtly re-order or adjust existing skills to align with the job's priorities.
 3. **Maintain Original Labels**: Keep the original 'label' for each skill line.
 4. Do **not** delete existing entries; even if something is only loosely related, leave it in place and focus on reordering or appending relevant additions instead of pruning.
-5. If you extract very few new skills from the job description, supplement by adding additional relevant skills while keeping every original entry intact—augment only, never remove.
+5. If you extract very few new skills from the job description, supplement by adding additional relevant skills while keeping every original entry intact-augment only, never remove.
+6. **No verb phrases**: Return ONLY noun-style skill tokens (tools, tech, platforms) of 1-3 words; never include verbs/phrases like "monitor system performance", "automated tests", "troubleshoot issues", "improve reliability", etc.
+7. For "Databases", only include actual database/storage engines or warehouses (e.g., Postgres, MongoDB, DynamoDB, Redis, Snowflake, BigQuery) and never add practices or concepts like "SQL query optimization" or "database internals". for programming languages only include programming languages
 
 ## INPUTS
 ### Job Description:
@@ -514,7 +516,7 @@ ${skillsDump}`.trim();
       temperature: 0,
       topP: 0.7,
       thinkingConfig: {
-        thinkingBudget: 2000,
+        thinkingBudget: 3000,
       },
       maxOutputTokens: 4000,
     },
@@ -550,7 +552,7 @@ strictly follow the json strcutureJSON OUTPUT SPECIFICATION
 { "skills": ["string"], "important": ["string"] }
 
 Key descriptions:
-- **skills**: Provide 4–10 technical items (frameworks, tools, databases) from the JD; omit course names and vague buzzwords, and limit development-practice entries to three intentional phrases (e.g., “CI/CD pipelines”).
+- **skills**: Provide 4–10 technical items (frameworks, tools, databases) from the JD; omit course names and vague buzzwords, and limit development-practice entries to one or two intentional phrases (e.g., “CI/CD pipelines”).
 - **important**: Up to 10 high-impact keywords (methodologies, practices); exclude non-technical terms, academic degrees, leadership language, or compensation.
 
 RULES
@@ -637,10 +639,12 @@ async function geminiPlan(
   {
     targetKeywords = [],
     inResumeKeywords = [],
+    primaryLanguage = "",
+    primaryCloudHint = "",
   } = {}
 ) {
-  const MIN_CHARS = 215;
-  const MAX_CHARS = 225;
+  const MIN_CHARS = 240;
+  const MAX_CHARS = 260;
 
   const formatHint =
     GEMINI_BULLET_FORMAT === "LATEX"
@@ -651,17 +655,27 @@ async function geminiPlan(
   const verified = (inResumeKeywords || []).filter(Boolean).slice(0, 160).join(", ");
 
 
+  const primaryLangNote = primaryLanguage
+    ? ` Use "${primaryLanguage}" as the ONLY programming language in Work Experience/Projects; replace other JD languages with it and keep any alternates only in the Skills line.`
+    : "";
+
+  const cloudHint = primaryCloudHint
+    ? ` Use "${primaryCloudHint}" as the primary cloud; avoid mixing multiple cloud providers in the same bullet and keep alternates only in Skills.`
+    : "";
+
   const refinedPolicy = `
 You are an experimental AI resume editor. Rewrite every bullet so it reads as though the candidate already operates inside the Job Description (JD) environment, even when that requires introducing JD technologies or terminology that never appeared in the original resume.
 
 ## Core Rules: Non-Negotiable
 1.  **JD Stack Supremacy:** Prioritize JD technologies, methodologies, and platform language above the legacy resume stack. Replace legacy tech references with JD-aligned tools unless doing so breaks the quantitative result.
 2.  **Introduce Missing Tools:** When the JD highlights tools the resume never mentioned, incorporate them directly as part of the candidate's responsibilities (e.g., rewrite "Node.js microservices" to "Python/FastAPI services" if the JD favors Python). Treat JD tools as canonical.
-3.  **Metrics & Outcomes Stay Real:** Keep every original metric, scale figure, and business impact unchanged. You may alter the narrative surrounding how the result was achieved, but never modify the numbers.
-4.  **Structure Lock:** STRICTLY maintain the original number of bullets per section and preserve their order.
-5.  **Length Gate:** Every bullet MUST be between ${MIN_CHARS} and ${MAX_CHARS} characters.
-6.  **No Company Name:** STRICTLY omit the word "${company}" and any internal-only tool names.
-7.  **Technology Repetition Cap:** Limit any specific technology (e.g., "React," "Java," "AWS") to a maximum of four mentions across the entire rewritten set.
+3.  **Primary Language Lock:** If the JD lists multiple alternative languages (e.g., "Java, Go, or Rust"), pick ONE as the primary for rewrites${primaryLangNote || " (prefer whichever is closest to the original bullet stack)"}; do not mention any other programming language in the rewritten bullets.
+${cloudHint ? `-  **Cloud Stack Lock:**${cloudHint}` : ""}
+4.  **Metrics & Outcomes Stay Real:** Keep every original metric, scale figure, and business impact unchanged. You may alter the narrative surrounding how the result was achieved, but never modify the numbers.
+5.  **Structure Lock:** STRICTLY maintain the original number of bullets per section and preserve their order.
+6.  **Length Gate:** Every bullet MUST be between ${MIN_CHARS} and ${MAX_CHARS} characters.
+7.  **No Company Name:** STRICTLY omit the word "${company}" and any internal-only tool names.
+8.  **Technology Repetition Cap:** Limit any specific technology (e.g., "React," "Java," "AWS") to a maximum of four mentions across the entire rewritten set.
 
 ## JD Alignment Playbook
 1.  **Lead with JD Priorities:** Anchor each bullet in the JD's verbs, responsibilities, and stack emphases (backend services, observability, ML Ops, governance, etc.).
@@ -675,6 +689,7 @@ You are an experimental AI resume editor. Rewrite every bullet so it reads as th
 * Exactly one sentence per bullet; remove filler words.
 * Never end a bullet with vague phrases like "enhancing user experience," "improving performance," "effectively," "significantly," or "aligning with."
 * Default to rewriting; retaining the original wording is a last resort.
+when very few skills are available dont repeat the same skill again and again you can retain original technologies instead of using the same skill over and over.
 
 ## Output Requirements
 * Return bullets in their original section order and count.
@@ -902,12 +917,14 @@ function extractSkillLine(tex, label) {
 
 function replaceSkillLine(tex, label, csv) {
   const L = labelToLatexPattern(label);
-  const items = csv
+  const rawItems = csv
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const deduped = [...new Set(items.map((x) => x.toLowerCase()))].map((lc) =>
-    items.find((x) => x.toLowerCase() === lc)
+  const cleanedItems = sanitizeSkillItems(rawItems);
+  const safeItems = cleanedItems.length ? cleanedItems : rawItems;
+  const deduped = [...new Set(safeItems.map((x) => x.toLowerCase()))].map((lc) =>
+    safeItems.find((x) => x.toLowerCase() === lc)
   );
   const joined = deduped.join(", ");
 
@@ -943,6 +960,11 @@ const cleanName = (s) => String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim();
 
 const DEFAULT_LOCATION = "Buffalo, New York";
 
+// Keep state abbreviations fully capitalized
+const US_STATE_CODES = new Set([
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"
+]);
+
 const capToken = (token) =>
   token
     .split(/([-'])/)
@@ -971,12 +993,17 @@ function formatLocation(loc) {
   const trimmed = String(loc || "").trim();
   if (!trimmed) return "";
   const segments = trimmed.split(",").map(s => s.trim()).filter(Boolean);
-  const formatSegment = (seg) =>
-    seg
+  const formatSegment = (seg) => {
+    if (!seg) return "";
+    const upper = seg.toUpperCase();
+    // Preserve/normalize state codes like "CA", "ny", etc.
+    if (US_STATE_CODES.has(upper)) return upper;
+    return seg
       .split(/\s+/)
       .map(capToken)
       .filter(Boolean)
       .join(" ");
+  };
   return segments.map(formatSegment).join(", ");
 }
 
@@ -1003,6 +1030,211 @@ function resolveLocation(userLocation, storedLocation) {
     formatLocation(storedLocation) ||
     DEFAULT_LOCATION
   );
+}
+
+function sanitizeSkillItems(items) {
+  const banned = [
+    "monitor", "monitoring", "monitored",
+    "troubleshoot", "troubleshooting", "troubleshoots",
+    "test", "tests", "testing", "automated tests",
+    "improve", "improving", "improved",
+    "resolve", "resolving", "resolved",
+    "troubleshoot issues", "troubleshooting issues"
+  ];
+  const maxWords = 4;
+
+  return items.filter((item) => {
+    const t = item.trim();
+    if (!t) return false;
+    const words = t.split(/\s+/);
+    if (words.length > maxWords) return false;
+    const lc = t.toLowerCase();
+    if (banned.some((b) => lc.includes(b))) return false;
+    return true;
+  });
+}
+
+const LANGUAGE_DISPLAY = {
+  javascript: "JavaScript",
+  typescript: "TypeScript",
+  python: "Python",
+  java: "Java",
+  "c#": "C#",
+  "c++": "C++",
+  c: "C",
+  go: "Go",
+  ruby: "Ruby",
+  php: "PHP",
+  swift: "Swift",
+  kotlin: "Kotlin",
+  scala: "Scala",
+  rust: "Rust",
+  dart: "Dart",
+};
+
+const LANGUAGE_ALIASES = {
+  js: "javascript",
+  javascript: "javascript",
+  "type script": "typescript",
+  typescript: "typescript",
+  ts: "typescript",
+  golang: "go",
+  "csharp": "c#",
+  "c#": "c#",
+  "c sharp": "c#",
+  "c++": "c++",
+  cpp: "c++",
+};
+
+const LANGUAGE_MATCHERS = [
+  { key: "javascript", patterns: [/\bjavascript\b/gi] }, // avoid matching ".js" in Next.js
+  { key: "typescript", patterns: [/\btypescript\b/gi, /\bts\b/gi, /\btype\s+script\b/gi] },
+  { key: "python", patterns: [/\bpython\b/gi] },
+  { key: "java", patterns: [/\bjava\b/gi] },
+  { key: "c#", patterns: [/C\#/gi, /\bC\s*sharp\b/gi, /\bcsharp\b/gi] },
+  { key: "c++", patterns: [/C\+\+/gi, /\bcpp\b/gi] },
+  { key: "c", patterns: [/\bC\b(?!\+\+|\s*sharp)/gi] },
+  { key: "go", patterns: [/\bgo\b/gi, /\bgolang\b/gi] },
+  { key: "ruby", patterns: [/\bruby\b/gi] },
+  { key: "php", patterns: [/\bphp\b/gi] },
+  { key: "swift", patterns: [/\bswift\b/gi] },
+  { key: "kotlin", patterns: [/\bkotlin\b/gi] },
+  { key: "scala", patterns: [/\bscala\b/gi] },
+  { key: "rust", patterns: [/\brust\b/gi] },
+  { key: "dart", patterns: [/\bdart\b/gi] },
+];
+
+function detectLanguageKey(token) {
+  const txt = String(token || "").toLowerCase();
+  for (const { key, patterns } of LANGUAGE_MATCHERS) {
+    for (const rx of patterns) {
+      rx.lastIndex = 0;
+      if (rx.test(txt)) return key;
+    }
+  }
+  return null;
+}
+
+function escapeRegexLiteral(s) {
+  return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const CLOUD_DISPLAY = {
+  azure: "Azure",
+  aws: "AWS",
+  gcp: "GCP",
+};
+
+const CLOUD_PATTERNS = {
+  azure: [/\bazure\b/gi],
+  aws: [/\baws\b/gi, /\bamazon\s+web\s+services\b/gi],
+  gcp: [/\bgcp\b/gi, /\bgoogle\s+cloud\b/gi],
+};
+
+function normalizePrimaryLanguagePrefs(raw) {
+  const tokens = String(raw || "")
+    .split(/[,/;]|(?:\band\b)|(?:\bor\b)/gi)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const ordered = [];
+  const seen = new Set();
+  for (const tok of tokens) {
+    const key = tok.replace(/\s+/g, " ").trim().toLowerCase();
+    const aliasKey = key.replace(/\s+/g, "");
+    const canonical = LANGUAGE_ALIASES[aliasKey] || LANGUAGE_ALIASES[key] || aliasKey;
+    if (!canonical || seen.has(canonical)) continue;
+    seen.add(canonical);
+    ordered.push(canonical);
+  }
+
+  const primaryOnly = ordered.length ? [ordered[0]] : [];
+  const displayList = primaryOnly.map((k) => LANGUAGE_DISPLAY[k] || k);
+  return {
+    ordered,
+    allowedKeys: new Set(primaryOnly),
+    displayList,
+  };
+}
+
+function buildPrimaryLanguageGuard(raw) {
+  const prefs = normalizePrimaryLanguagePrefs(raw);
+  if (!prefs.ordered.length) return null;
+  return {
+    allowedKeys: prefs.allowedKeys,
+    primaryDisplay: prefs.displayList[0],
+    displayList: prefs.displayList,
+  };
+}
+
+function enforcePrimaryLanguageOnBullets(bullets, guard) {
+  if (!guard?.allowedKeys?.size) return bullets;
+  const replacement = guard.primaryDisplay || Array.from(guard.allowedKeys)[0];
+  if (!replacement) return bullets;
+
+  return bullets.map((b) => {
+    let out = b;
+    for (const matcher of LANGUAGE_MATCHERS) {
+      if (guard.allowedKeys.has(matcher.key)) continue;
+      for (const rx of matcher.patterns) {
+        out = out.replace(rx, replacement);
+      }
+    }
+    return out.replace(/\s{2,}/g, " ").trim();
+  });
+}
+
+function normalizeSlashLanguagePairs(bullets, guard) {
+  if (!guard?.allowedKeys?.size) return bullets;
+  const primaryName = guard.displayList?.[0];
+  if (!primaryName) return bullets;
+  const rx = new RegExp(`\\b${escapeRegexLiteral(primaryName)}\\b\\s*/\\s*([A-Za-z][\\w.+#-]{2,})`, "g");
+
+  return bullets.map((b) => {
+    let out = b;
+    out = out.replace(rx, (_m, rhs) => {
+      const rhsKey = detectLanguageKey(rhs);
+      // If the RHS is also a language, collapse to the primary to avoid hybrid stacks
+      if (rhsKey) return primaryName;
+      return `${primaryName} with ${rhs}`;
+    });
+    return out.replace(/\s{2,}/g, " ").trim();
+  });
+}
+
+function detectPreferredCloudProvider(jdText) {
+  const txt = String(jdText || "").toLowerCase();
+  const score = { azure: 0, aws: 0, gcp: 0 };
+  for (const [key, patterns] of Object.entries(CLOUD_PATTERNS)) {
+    for (const rx of patterns) {
+      const m = txt.match(rx);
+      if (m) score[key] += m.length;
+    }
+  }
+  const order = ["azure", "aws", "gcp"];
+  const best = order.reduce((acc, key) => {
+    if (score[key] > score[acc]) return key;
+    if (score[key] === score[acc] && acc === "gcp" && key === "azure") return key;
+    return acc;
+  }, "azure");
+  return score[best] > 0 ? { preferred: best, display: CLOUD_DISPLAY[best] || best } : null;
+}
+
+function enforcePrimaryCloudOnBullets(bullets, guard) {
+  if (!guard?.preferred) return bullets;
+  const keep = guard.preferred;
+  const outBullets = [];
+  for (const b of bullets) {
+    let out = b;
+    for (const [key, patterns] of Object.entries(CLOUD_PATTERNS)) {
+      if (key === keep) continue;
+      for (const rx of patterns) {
+        out = out.replace(rx, guard.display || keep);
+      }
+    }
+    outBullets.push(out.replace(/\s{2,}/g, " ").trim());
+  }
+  return outBullets;
 }
 
 function fixCommonLatexBugs(tex) {
@@ -1073,8 +1305,10 @@ function splitMergedBulletText(s) {
   return parts.length ? parts : [t];
 }
 
-function applyOps(tex, ops) {
+function applyOps(tex, ops, opts = {}) {
   let out = tex;
+  const primaryLanguageGuard = opts.primaryLanguageGuard || null;
+  const primaryCloudGuard = opts.primaryCloudGuard || null;
   const sectionsCache = allRewriteableSections(out);
 
   const sectionMap = Object.fromEntries(
@@ -1119,6 +1353,15 @@ function applyOps(tex, ops) {
           }
         }
 
+        if (primaryLanguageGuard) {
+          finalBullets = enforcePrimaryLanguageOnBullets(finalBullets, primaryLanguageGuard);
+          finalBullets = normalizeSlashLanguagePairs(finalBullets, primaryLanguageGuard);
+        }
+
+        if (primaryCloudGuard) {
+          finalBullets = enforcePrimaryCloudOnBullets(finalBullets, primaryCloudGuard);
+        }
+
         out = replaceSectionBullets(out, sec.name, finalBullets);
       } else if (op.op === "replace_skill_csv") {
         if (!op.label || !op.csv) continue;
@@ -1134,14 +1377,15 @@ function applyOps(tex, ops) {
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ PDF Compilation Utils â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function compileToPdf(texSource, clsContent = "") {
+async function compileToPdf(texSource, clsContent = "", clsFileName = "fed-res.cls") {
   const fd = new FormData();
 
   fd.append("filename[]", "document.tex");
   fd.append("filecontents[]", new Blob([texSource], { type: "text/plain" }));
 
   if (clsContent) {
-    fd.append("filename[]", "fed-res.cls");
+    const uploadName = clsFileName || "fed-res.cls";
+    fd.append("filename[]", uploadName);
     fd.append("filecontents[]", new Blob([clsContent], { type: "text/plain" }));
   }
 
@@ -1436,7 +1680,7 @@ Vipul Charugundla`;
   let generationToken = null;
 
   (async () => {
-    const { jd, company, location, prompt, categoryId, selectedProjectIds } = msg.payload || {};
+    const { jd, company, location, prompt, primaryLanguage, categoryId, selectedProjectIds } = msg.payload || {};
     const { resumeData: DB } = await chrome.storage.local.get("resumeData");
     const locationDisplay = resolveLocation(location, DB?.location);
 
@@ -1530,12 +1774,19 @@ ${bullets}
       ])
     ).filter(Boolean);
 
+    const primaryLanguageGuard = buildPrimaryLanguageGuard(primaryLanguage || "");
+    const primaryLanguageHint = primaryLanguageGuard?.displayList?.join(" / ") || (primaryLanguage || "");
+    const primaryCloudGuard = detectPreferredCloudProvider(jd);
+    const primaryCloudHint = primaryCloudGuard?.display || "";
+
     // Pass 1: role-aware bullet rewrites (applies to Work Experience + Projects)
     const bulletOps = await geminiPlan(apikey, company, jd, prompt, latex, {
       targetKeywords,
       inResumeKeywords,
+      primaryLanguage: primaryLanguageHint,
+      primaryCloudHint,
     });
-    let finalLatex = applyOps(latex, bulletOps);
+    let finalLatex = applyOps(latex, bulletOps, { primaryLanguageGuard, primaryCloudGuard });
 
 
     // Pass 2: skills refinement
@@ -1567,7 +1818,7 @@ ${bullets}
 
     // --- 3) Compile & return ---
     console.log("--- FINAL LATEX SOURCE TO BE COMPILED ---\n\n", finalLatex);
-    const pdfBuf = await compileToPdf(finalLatex, category.clsFileContent);
+    const pdfBuf = await compileToPdf(finalLatex, category.clsFileContent, category.clsFileName);
     const pdfB64 = arrayBufferToBase64(pdfBuf);
     const companySlug =
       (company || "").trim().replace(/\s+/g, "_") || "Generated";
