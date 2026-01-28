@@ -1,0 +1,157 @@
+% Preamble
+
+\documentclass[9pt]{fed-res}
+\usepackage{xcolor} % if not already loaded
+
+\usepackage[paperwidth=9.10in, paperheight=11.5in,margin=0.2in]{geometry} % Adjusts the margins
+\usepackage{fontawesome5}
+\usepackage{hyperref}
+
+% Preamble
+\usepackage{graphicx} % for \scalebox
+
+% ATS-friendly, human-invisible microtext
+\newcommand{\atsmicro}[1]{%
+  {\color{white}\scalebox{0.01}{\mbox{#1}}}%
+}
+
+\begin{document}
+
+%-------------------------------------------------------------------------------
+%	HEADING INFORMATION
+%-------------------------------------------------------------------------------
+
+\begin{center}
+    \textbf{\huge \scshape Vipul Charugundla} \\ \vspace{2pt}
+    Buffalo, New York $\;|\;$ 
+    (716) 710-7704 $\;|\;$ charugundlavipul@gmail.com $\;|\;$
+    \href{https://github.com/Charugundlavipul}{\faGithub \ GitHub}$\;|\;$
+    \href{https://www.linkedin.com/in/charugundla-vipul-3911561aa/}{\faLinkedin \ LinkedIn}$\;|\;$
+    \href{https://vipulcharugundla.netlify.app/}{ \faBriefcase \ Portfolio}
+\end{center} 
+\vspace{-10pt}
+\section{Professional Summary}
+\vspace{2pt}
+
+\begin{itemize}[leftmargin=10pt,label={}]
+\item Software Engineer with 3+ years of experience building scalable microservices, full-stack applications, and AI-driven platforms using Java, Spring Boot, Node.js, and React. I have a strong track record of modernizing architectures on AWS and GCP, consistently optimizing system performance to deliver reliable, production-ready solutions. Passionate about intelligent engineering, I design end-to-end workflows including RAG and recommendation systems, ensuring every release is driven by clean, maintainable practices.
+\end{itemize}
+\vspace{-6pt}
+\section{Technical Skills}
+\vspace{2pt}
+\resumeSubHeadingListStart
+\item \textbf{Programming Languages}{: TypeScript, JavaScript, Go, Dart, Python, C, C++, SQL}\vspace{-6pt}
+\item \textbf{Frameworks \& Libraries}{: React, Next.js, Node.js, Express.js, Redux, React Query, Tailwind CSS, Flutter}\vspace{-6pt}
+\item \textbf{Databases}{: MongoDB, PostgreSQL, MySQL, Redis, DynamoDB, TiDB, MongoDB, GraphQL}\vspace{-6pt}
+\item \textbf{Tools and Technologies}{: Docker, Kubernetes, Git, Jenkins, Kafka, RabbitMQ, Vercel, Netlify, Terraform}\vspace{-6pt}
+\item \textbf{Cloud \& DevOps}{: AWS (ECS, Lambda, S3, CloudFront, API Gateway), GCP, Azure, Jenkins, UNIX/Linux}\vspace{-6pt}
+\item \textbf{Development Practices}{: REST/GraphQL APIs, WebSockets, CI/CD, Agile/Scrum, SDLC, System Design, Jira}\vspace{-6pt}
+\item \textbf{Certifications}{: AWS Certified Solutions Architect, AWS Certified Developer, Microsoft Essentials in Generative AI}\vspace{-6pt}
+\item \textbf{Course Work}{: Data Structures, DBMS, Computer Architecture, Cloud Computing, Artificial Intelligence, Algorithms, OS}
+\resumeSubHeadingListEnd
+
+
+\vspace{-10pt}
+
+\section{Work Experience}
+\resumeSubHeadingListStart
+\vspace{3pt}
+
+\resumeSubheading
+  {Senior Software Development Engineer}{Oct 2024 -- Present}
+  {PilProgram}{Amherst, NY}
+\begin{itemize}[leftmargin=10pt,itemsep=1pt,parsep=0pt,topsep=3pt,partopsep=0pt]
+\item Led a cross-functional team of 6 (4 engineers, 2 designers) to architect and launch Parliamade, a production-ready mobile app, implementing React Native-based UI, Node.js/Express services, MongoDB, CI/CD automation to unify fragmented user workflows.
+
+\item Architected the core AI recommendation engine using Node.js and Google Recommendations AI to replace manual, low-relevance content discovery, improving recommendation efficiency by 35\% through scalable machine learning pipelines and optimized data processing.
+
+\item Architected a scalable cloud infrastructure for Parliamade using AWS ECS for container orchestration and Lambda for serverless compute behind API Gateway, optimizing content delivery via S3 and CloudFront edge caching to reduce load latency by 60\%.
+
+\item Engineered robust client and server state management using TanStack Query and Zustand to eliminate inconsistent UI states and redundant network calls, simplifying data fetching and caching while improving responsiveness and reliability of critical user flows.
+
+\item Automated regression testing suites, UAT, Integration Testing, and CI/CD pipelines with Jenkins, Docker, and Kubernetes to reduce manual deployment overhead, significantly improving release reliability and shortening delivery cycles for distributed systems.
+
+
+\end{itemize}
+
+\vspace{-6pt}
+\resumeSubheading
+  {Software Development Engineer-1}{Jan 2023 -- Aug 2024}
+  {Brane Group}{Hyderabad}
+\begin{itemize}[leftmargin=10pt,itemsep=1pt,parsep=0pt,topsep=3pt,partopsep=0pt]
+\item Led design of an adapter platform integrating Firebase and Google Classroom using Node.js, Express and GraphQL (gRPC), defining schema contracts, Passport.js (OAuth2) flows and feature-flag–controlled rollouts, cutting partner onboarding time by 30\%.
+
+\item Architected a low-latency, highly available data layer with Redis and MessagePack serialization, using Redis Cluster and Node.js clustering to offload the MongoDB database, reduce p99 latency by 40\% and increase transaction throughput by 50\%.
+
+\item Built a multi-tenant approval engine with a JSON-based DSL in MongoDB, idempotent workflow orchestration (using BullMQ), saga-style compensations and audit trails, automating hierarchical approvals and reducing manual effort by 35\%.
+\item Drove migration of 7 critical microservices from Node.js 14$\rightarrow$20 and JavaScript$\rightarrow$TypeScript, owning compatibility analysis, careful phased rollout strategy and regression guardrails, achieving zero-downtime releases while maintaining SLIs/SLOs and simplifying future upgrades.
+
+\item Re-architected Express.js/NestJS APIs by consolidating boundaries and implementing non-blocking event-loop optimizations, Mongoose connection pooling and resiliency patterns, cutting average response time from 400 ms to 30 ms and improving system throughput.
+
+\item Delivered a Electron + React client for data management on Windows and macOS using Redux Toolkit \& React Query, offline-first sync (via IndexedDB) and RBAC, backed by Node.js services and optimized MongoDB Aggregations, improving data access time by 50\%.
+
+\end{itemize}
+
+\vspace{-6pt}
+\resumeSubheading
+  {SDE Intern}{Jun 2022 -- Aug 2022}
+  {Xanadu}{Mumbai}
+\begin{itemize}[leftmargin=10pt,itemsep=2pt,parsep=0pt,topsep=5pt,partopsep=0pt]
+
+\item Built a full-stack real estate lead platform with customer journey tracking and site-manager attendance; implemented a React/Next.js frontend, Node.js microservices, and PostgreSQL,  Redis for Caching, increasing lead conversion by 40\% and engagement by 70\%.
+
+\item Improved SEO and performance using Next.js for SSR, React Query for client state, Redis caching, AWS S3 + CloudFront, lazy loading, Lighthouse, and ELK Kibana dashboards, reducing page load times by 60\% and boosting organic traffic.
+
+\end{itemize}
+
+\resumeSubHeadingListEnd
+
+\vspace{-15pt}
+\section{Projects}
+\resumeSubHeadingListStart
+
+
+\resumeProjectHeading
+      {\textbf{SmartGoal AI} \href{https://github.com/Charugundlavipul/SmartGoal-AI}{\underline{GitHub}}}{May 2025 -- Present}
+\begin{itemize}[leftmargin=10pt,itemsep=2pt,parsep=0pt,topsep=5pt,partopsep=0pt]
+  \item Developed a secure, scalable AI-powered therapy analysis platform using React, Node.js, and MongoDB hosted on AWS with SUNY Buffalo and USC, enabling speech-language pathologists to generate visit notes, design custom activities, and track progress for over 300 children.
+
+\item Integrated and fine-tuned Google’s Gemma language model using QLoRA adapters to summarize clinical session data and generate actionable therapy recommendations, significantly improving report generation accuracy and operational efficiency by 45\%.
+
+\end{itemize}
+\vspace{-10pt}
+
+\resumeProjectHeading {\textbf{JobGenie} \href{https://github.com/Charugundlavipul/Job-Genie}{\underline{GitHub}}}{Mar
+ 2025 -- May 2025}
+\begin{itemize}[leftmargin=10pt,itemsep=2pt,parsep=0pt,topsep=5pt,partopsep=0pt]
+\item Designed and deployed an AI-driven talent sourcing platform that analyzes unstructured job descriptions and surfaces top candidates by skill match, experience, and role relevance, accelerating recruiter workflows by 80\%.
+\item Developed the modular backend using Node.js, Express, and Redis for caching high-volume queries, and implemented embedding-based similarity scoring with a vector index for accurate, real-time candidate-job matching with scalable APIs.
+\end{itemize}
+\vspace{-10pt}
+
+
+\resumeSubHeadingListEnd
+
+
+\vspace{-10pt}
+\section{Education}
+\vspace{2pt}
+
+% Create a bullet-less list with a custom left margin just for this section
+\begin{list}{}{%
+  \setlength{\leftmargin}{10pt}% <- tweak indent here (e.g., 6–10mm)
+  \setlength{\labelwidth}{0pt}
+  \setlength{\labelsep}{0pt}
+  \setlength{\itemsep}{0pt}
+  \setlength{\topsep}{0pt}
+}
+
+\item \noindent\textbf{University at Buffalo (SUNY Buffalo)}, M.S., Computer and Information Sciences \hfill Jul 2024 -- Dec 2025
+\vspace{-2pt}
+
+\item \noindent\textbf{Shiv Nadar University}, B.Tech., Computer Science and Engineering \hfill Jul 2019 -- May 2023
+
+\end{list}
+
+
+\end{document}

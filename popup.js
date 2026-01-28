@@ -9,14 +9,16 @@
     company: "",
     location: "",
     jd: "",
-    primaryLanguage: "",
+    primaryStack: "",
     prompt: "",
     categoryId: "",
     selectedProjectIds: [],
     pdfB64: "",
     pdfFilename: "",
+    tex: "",
     status: "",
     generationInBackground: false,
+    onlySkillsMode: false,
     // Cover Letter specific
     clCompanyDetails: "",
     clPdfB64: "",
@@ -79,6 +81,9 @@
       const stored = await chrome.storage.local.get(POPUP_STATE_KEY);
       if (stored && stored[POPUP_STATE_KEY]) {
         popupState = { ...DEFAULT_STATE, ...stored[POPUP_STATE_KEY] };
+        if (!popupState.primaryStack && popupState.primaryLanguage) {
+          popupState.primaryStack = popupState.primaryLanguage;
+        }
       }
     } catch (err) {
       console.warn("Unable to load popup state", err);
@@ -197,11 +202,13 @@
     const companyInput = $("company");
     const locationInput = $("location");
     const jdInput = $("jd");
-    const primaryLanguageInput = $("primaryLanguage");
+    const primaryStackInput = $("primaryStack");
     const promptInput = $("prompt");
     const categorySelect = $("categorySelect");
     const projectContainer = $("projectSelection");
     const pdfLink = $("downloadPdf");
+    const copyLatexBtn = $("copyLatex");
+    const onlySkillsCheckbox = $("onlySkillsMode");
     const generateBtn = $("generate");
     // Close button removed
 
@@ -223,11 +230,14 @@
         updateState({ location: DB.location });
       }
       jdInput.value = popupState.jd || "";
-      primaryLanguageInput.value = popupState.primaryLanguage || "";
+      primaryStackInput.value = popupState.primaryStack || popupState.primaryLanguage || "";
       promptInput.value = popupState.prompt || "";
       clCompanyDetails.value = popupState.clCompanyDetails || "";
       clRoleInput.value = popupState.clRole || "";
       clJdInput.value = popupState.clJd || "";
+      if (onlySkillsCheckbox) {
+        onlySkillsCheckbox.checked = !!popupState.onlySkillsMode;
+      }
 
       const validCategory = DB.categories.some((cat) => cat.id === popupState.categoryId);
       if (validCategory) {
@@ -265,6 +275,11 @@
       } else {
         copyClBtn.style.display = "none";
       }
+      if (popupState.tex) {
+        copyLatexBtn.style.display = "inline-block";
+      } else {
+        copyLatexBtn.style.display = "none";
+      }
     };
 
     applyStateToDom();
@@ -299,8 +314,9 @@
         updateState({ selectedProjectIds: [] });
       }
 
-      updateState({ pdfB64: "", pdfFilename: "" }, { flush: true });
+      updateState({ pdfB64: "", pdfFilename: "", tex: "" }, { flush: true });
       hide(pdfLink);
+      hide(copyLatexBtn);
       revokeBlobUrl();
     });
 
@@ -316,10 +332,16 @@
       input.addEventListener("input", () => updateState({ [key]: input.value }));
     };
 
+    if (onlySkillsCheckbox) {
+      onlySkillsCheckbox.addEventListener("change", () =>
+        updateState({ onlySkillsMode: onlySkillsCheckbox.checked })
+      );
+    }
+
     handleInput(companyInput, "company");
     handleInput(locationInput, "location");
     handleInput(jdInput, "jd");
-    handleInput(primaryLanguageInput, "primaryLanguage");
+    handleInput(primaryStackInput, "primaryStack");
     handleInput(promptInput, "prompt");
     handleInput(clCompanyDetails, "clCompanyDetails");
     handleInput(clJdInput, "clJd");
@@ -374,6 +396,23 @@
       });
     }
 
+    if (copyLatexBtn) {
+      copyLatexBtn.addEventListener("click", () => {
+        if (popupState.tex) {
+          navigator.clipboard.writeText(popupState.tex).then(() => {
+            const originalText = copyLatexBtn.textContent;
+            copyLatexBtn.textContent = "Copied!";
+            setTimeout(() => {
+              copyLatexBtn.textContent = originalText;
+            }, 2000);
+          }).catch(err => {
+            console.error("Failed to copy LaTeX: ", err);
+            statusEl.textContent = "Failed to copy LaTeX.";
+          });
+        }
+      });
+    }
+
     generateBtn.addEventListener("click", async () => {
       const company = companyInput.value.trim();
       const location = locationInput.value.trim();
@@ -383,6 +422,7 @@
         document.querySelectorAll(".project-checkbox:checked"),
         (el) => el.value
       );
+      const onlySkillsMode = !!onlySkillsCheckbox?.checked;
 
       if (!categoryId) {
         statusEl.textContent = "Please select a category.";
@@ -402,22 +442,29 @@
 
       revokeBlobUrl();
       hide(pdfLink);
+      hide(copyLatexBtn);
 
       const prevText = generateBtn.textContent;
       generateBtn.disabled = true;
       generateBtn.textContent = "Working...";
-      statusEl.textContent = "Building .tex + Planning + Rewriting + Compiling...";
+      const generationStatus = onlySkillsMode
+        ? "Updating skills + location only..."
+        : "Building .tex + Planning + Rewriting + Compiling...";
+      statusEl.textContent = generationStatus;
       updateState(
         {
-          status: statusEl.textContent,
+          status: generationStatus,
           company,
           location,
           jd,
+          primaryStack: primaryStackInput.value.trim(),
           prompt: promptInput.value.trim(),
           categoryId,
           selectedProjectIds,
+          onlySkillsMode,
           pdfB64: "",
           pdfFilename: "",
+          tex: "",
           generationInBackground: true
         },
         { flush: true }
@@ -430,10 +477,11 @@
             jd,
             company,
             location,
-            primaryLanguage: primaryLanguageInput.value.trim(),
+            primaryStack: primaryStackInput.value.trim(),
             prompt: promptInput.value.trim(),
             categoryId,
-            selectedProjectIds
+            selectedProjectIds,
+            onlySkillsMode
           }
         });
 
@@ -456,12 +504,14 @@
         const downloadName = `Vipul_Charugundla_${company.replace(/\s+/g, "_")}.pdf`;
         pdfLink.download = downloadName;
         pdfLink.style.display = "inline-block";
+        copyLatexBtn.style.display = "inline-block";
         statusEl.textContent = "PDF ready!";
 
         updateState(
           {
             pdfB64: resp.pdfB64,
             pdfFilename: downloadName,
+            tex: resp.tex || "",
             status: statusEl.textContent,
             generationInBackground: false
           },
@@ -472,7 +522,7 @@
         const message = err?.message || "Unexpected error. See console.";
         statusEl.textContent = message;
         updateState(
-          { pdfB64: "", pdfFilename: "", status: message, generationInBackground: false },
+          { pdfB64: "", pdfFilename: "", tex: "", status: message, generationInBackground: false },
           { flush: true }
         );
       } finally {

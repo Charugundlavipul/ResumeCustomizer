@@ -493,7 +493,7 @@ You are an AI assistant that refines resume skill sections to match a job descri
 - Each object must have this structure: { "op": "replace_skill_csv", "label": "string", "csv": "string" }
 
 ## PROCESSING LOGIC
-1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, add it ONLY if it clearly fits the chosen skill line. For the labels "Programming Languages", "Frameworks & Libraries", "Databases", "Tools", and "Cloud & DevOps", triple-check relevance and skip any generic or irrelevant skills instead of forcing them in.  Insert the skill somewhere in the middle (not appended), avoid duplicates, and if the skill text has more than 4 words, include only the most meaningful ~80% of its words.
+1. **Incorporate Mandatory Skills**: For EACH skill in the "Mandatory Skills to Include" list, add it ONLY if it clearly fits the chosen skill line. For the labels "Programming Languages", "Frameworks & Libraries", "Databases", "Tools and Technologies", and "Cloud & DevOps", triple-check relevance and skip any generic or irrelevant skills instead of forcing them in.  Insert the skill somewhere in the middle (not appended), avoid duplicates, and if the skill text has more than 4 words, include only the most meaningful ~80% of its words.
 2. **Refine Existing Skills**: Analyze the job description and subtly re-order or adjust existing skills to align with the job's priorities.
 3. **Maintain Original Labels**: Keep the original 'label' for each skill line.
 4. Do **not** delete existing entries; even if something is only loosely related, leave it in place and focus on reordering or appending relevant additions instead of pruning.
@@ -523,7 +523,7 @@ ${skillsDump}`.trim();
   };
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
       apikey
     )}`,
     {
@@ -605,7 +605,7 @@ function collectResumeSkillKeywords(tex) {
     "Programming Languages",
     "Frameworks & Libraries",
     "Databases",
-    "Tools",
+    "Tools and Technologies",
     "Cloud & DevOps",
     "Development Practices",
     "Certifications",
@@ -630,6 +630,43 @@ function collectResumeSkillKeywords(tex) {
   return ordered;
 }
 
+function splitStuckToken(token) {
+  const res = [];
+  let buf = "";
+  const t = String(token || "");
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    const prev = t[i - 1] || "";
+    const boundary =
+      i > 0 && /[A-Z]/.test(ch) && /[a-z0-9)]/.test(prev) && prev !== " ";
+    if (boundary && buf.trim()) {
+      res.push(buf.trim());
+      buf = ch;
+    } else {
+      buf += ch;
+    }
+  }
+  if (buf.trim()) res.push(buf.trim());
+  return res.length ? res : [t.trim()].filter(Boolean);
+}
+
+function normalizePrimaryStack(raw) {
+  const tokens = String(raw || "")
+    .split(/[,/;]|(?:\band\b)|(?:\bor\b)/gi)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const seen = new Set();
+  const ordered = [];
+  for (const tok of tokens) {
+    const key = tok.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(tok);
+  }
+  return ordered.slice(0, 6);
+}
+
 async function geminiPlan(
   apikey,
   company,
@@ -639,7 +676,7 @@ async function geminiPlan(
   {
     targetKeywords = [],
     inResumeKeywords = [],
-    primaryLanguage = "",
+    primaryStack = [],
     primaryCloudHint = "",
   } = {}
 ) {
@@ -654,10 +691,13 @@ async function geminiPlan(
   const tgt = (targetKeywords || []).filter(Boolean).slice(0, 80).join(", ");
   const verified = (inResumeKeywords || []).filter(Boolean).slice(0, 160).join(", ");
 
-
-  const primaryLangNote = primaryLanguage
-    ? ` Use "${primaryLanguage}" as the ONLY programming language in Work Experience/Projects; replace other JD languages with it and keep any alternates only in the Skills line.`
-    : "";
+  const primaryStackList = Array.isArray(primaryStack)
+    ? primaryStack.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 6)
+    : normalizePrimaryStack(primaryStack);
+  const primaryStackDisplay = primaryStackList.join(", ");
+  const primaryStackRule = primaryStackList.length
+    ? `3.  **Primary Tech Stack Focus:** Favor the user's primary stack (${primaryStackDisplay}) and closely related libraries (frameworks, ORMs, testing tools, cloud SDKs) when they make sense for the JD. Rotate stack items across bullets, use at most one primary-stack item per bullet, and keep complementary JD/resume technologies so the resume does not feel one-note.`
+    : `3.  **Primary Tech Stack Focus:** Align to the JD stack naturally without forcing language swaps.`;
 
   const cloudHint = primaryCloudHint
     ? ` Use "${primaryCloudHint}" as the primary cloud; avoid mixing multiple cloud providers in the same bullet and keep alternates only in Skills.`
@@ -668,8 +708,8 @@ You are an experimental AI resume editor. Rewrite every bullet so it reads as th
 
 ## Core Rules: Non-Negotiable
 1.  **JD Stack Supremacy:** Prioritize JD technologies, methodologies, and platform language above the legacy resume stack. Replace legacy tech references with JD-aligned tools unless doing so breaks the quantitative result.
-2.  **Introduce Missing Tools:** When the JD highlights tools the resume never mentioned, incorporate them directly as part of the candidate's responsibilities (e.g., rewrite "Node.js microservices" to "Python/FastAPI services" if the JD favors Python). Treat JD tools as canonical.
-3.  **Primary Language Lock:** If the JD lists multiple alternative languages (e.g., "Java, Go, or Rust"), pick ONE as the primary for rewrites${primaryLangNote || " (prefer whichever is closest to the original bullet stack)"}; do not mention any other programming language in the rewritten bullets.
+2.  **Introduce Missing Tools:** When the JD highlights tools the resume never mentioned, incorporate them directly as part of the candidate's responsibilities (e.g., rewrite "Node.js microservices" to "FastAPI services" if the JD favors Python). Treat JD tools as canonical.
+${primaryStackRule}
 ${cloudHint ? `-  **Cloud Stack Lock:**${cloudHint}` : ""}
 4.  **Metrics & Outcomes Stay Real:** Keep every original metric, scale figure, and business impact unchanged. You may alter the narrative surrounding how the result was achieved, but never modify the numbers.
 5.  **Structure Lock:** STRICTLY maintain the original number of bullets per section and preserve their order.
@@ -689,6 +729,7 @@ ${cloudHint ? `-  **Cloud Stack Lock:**${cloudHint}` : ""}
 * Exactly one sentence per bullet; remove filler words.
 * Never end a bullet with vague phrases like "enhancing user experience," "improving performance," "effectively," "significantly," or "aligning with."
 * Default to rewriting; retaining the original wording is a last resort.
+* Try to Include any relevant tools and frameworks mentioned in the JD when crafting the JD-aligned bullets but don't over use them and force them.
 when very few skills are available dont repeat the same skill again and again you can retain original technologies instead of using the same skill over and over.
 
 ## Output Requirements
@@ -917,9 +958,13 @@ function extractSkillLine(tex, label) {
 
 function replaceSkillLine(tex, label, csv) {
   const L = labelToLatexPattern(label);
+  const escapedLabel = escapeLatex(label);
   const rawItems = csv
     .split(",")
     .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => s.replace(/\\vspace\{[^}]*\}/gi, " "))
+    .map((s) => s.replace(/\s{2,}/g, " ").trim())
     .filter(Boolean);
   const cleanedItems = sanitizeSkillItems(rawItems);
   const safeItems = cleanedItems.length ? cleanedItems : rawItems;
@@ -927,33 +972,66 @@ function replaceSkillLine(tex, label, csv) {
     safeItems.find((x) => x.toLowerCase() === lc)
   );
   const joined = deduped.join(", ");
+  const escapedJoined = escapeLatex(joined);
+  const normalizedLine = `\\item \\textbf{${escapedLabel}}: ${escapedJoined}\\vspace{-5pt}`;
 
-  const rxA = new RegExp(
-    `(\\\\item\\s*\\\\textbf\\{${L}\\}\\{:\\s*)([^}]+)(\\})`,
+  // 1. Brace Style: \item \textbf{Label}{: ... } -- supports multi-line content
+  // Using [ \t]* instead of \s* after } to avoid eating newlines before \resumeSubHeadingListEnd
+  const braceStyle = new RegExp(
+    `\\\\item\\s*\\\\textbf\\{${L}\\}\\{:\\s*([\\s\\S]*?)\\}[ \\t]*(?:\\\\vspace[^\\n]*)?`,
     "m"
   );
-  if (rxA.test(tex)) {
-    console.log(`[skills] replaced (brace style): ${label}`);
-    return tex.replace(rxA, (_f, a, _b, c) => `${a}${escapeLatex(joined)}${c}`);
+  if (braceStyle.test(tex)) {
+    console.log(`[skills] replaced (brace style -> normalized): ${label}`);
+    return tex.replace(braceStyle, normalizedLine);
   }
 
-  const rxB = new RegExp(
-    `(\\\\item\\s*\\\\textbf\\{${L}\\}:\\s*)([^\\n\\\\]+)`,
+  // 2. Colon Style: \item \textbf{Label}: ...
+  const colonStyle = new RegExp(
+    `\\\\item\\s*\\\\textbf\\{${L}\\}:.*`,
     "m"
   );
-  if (rxB.test(tex)) {
-    console.log(`[skills] replaced (colon style): ${label}`);
-    return tex.replace(rxB, (_f, a, _b) => `${a}${escapeLatex(joined)}`);
+  if (colonStyle.test(tex)) {
+    console.log(`[skills] replaced (colon style -> normalized): ${label}`);
+    return tex.replace(colonStyle, normalizedLine);
+  }
+
+  // 3. Fallback: Any line starting with the label (e.g. \item \textbf{Label} ...)
+  const anyStyle = new RegExp(
+    `^\\s*\\\\item\\s*\\\\textbf\\{${L}\\}[^\\n]*`,
+    "m"
+  );
+  if (anyStyle.test(tex)) {
+    console.log(`[skills] replaced (any style -> normalized): ${label}`);
+    return tex.replace(anyStyle, normalizedLine);
   }
 
   return tex.replace(
     /\\resumeSubHeadingListStart([\s\S]*?)(?=\\resumeSubHeadingListEnd)/,
     (full, body) =>
-      full.replace(
-        body,
-        `\n\\item \\textbf{${label}}: ${escapeLatex(joined)}\\vspace{-5pt}\n` + body
-      )
+      full.replace(body, `\n${normalizedLine}\n${body}`)
   );
+}
+
+function normalizeAllSkillLines(tex) {
+  const labels = [
+    "Programming Languages",
+    "Frameworks & Libraries",
+    "Databases",
+    "Tools and Technologies",
+    "Cloud & DevOps",
+    "Development Practices",
+    "Certifications",
+    "Course Work",
+  ];
+  let out = tex;
+  for (const lab of labels) {
+    const line = extractSkillLine(out, lab);
+    if (line) {
+      out = replaceSkillLine(out, lab, line.items);
+    }
+  }
+  return out;
 }
 
 const cleanName = (s) => String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim();
@@ -962,7 +1040,7 @@ const DEFAULT_LOCATION = "Buffalo, New York";
 
 // Keep state abbreviations fully capitalized
 const US_STATE_CODES = new Set([
-  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
 ]);
 
 const capToken = (token) =>
@@ -1252,6 +1330,12 @@ function fixCommonLatexBugs(tex) {
 
   t = t.replace(/}\s*(?=\\vspace|$)/g, "}");
 
+  // Patch: Replace risky {\leftskip=...} blocks with a clean itemize, which avoids "Extra }" errors
+  t = t.replace(
+    /\{\s*\\leftskip\s*=\s*(\d+(?:pt|in|cm))\s+([\s\S]*?)\s*\\par\s*\}/g,
+    (_m, size, content) => `\\begin{itemize}[leftmargin=${size},label={}] \n\\item ${content.trim()} \n\\end{itemize}`
+  );
+
   return t;
 }
 
@@ -1307,7 +1391,6 @@ function splitMergedBulletText(s) {
 
 function applyOps(tex, ops, opts = {}) {
   let out = tex;
-  const primaryLanguageGuard = opts.primaryLanguageGuard || null;
   const primaryCloudGuard = opts.primaryCloudGuard || null;
   const sectionsCache = allRewriteableSections(out);
 
@@ -1353,11 +1436,6 @@ function applyOps(tex, ops, opts = {}) {
           }
         }
 
-        if (primaryLanguageGuard) {
-          finalBullets = enforcePrimaryLanguageOnBullets(finalBullets, primaryLanguageGuard);
-          finalBullets = normalizeSlashLanguagePairs(finalBullets, primaryLanguageGuard);
-        }
-
         if (primaryCloudGuard) {
           finalBullets = enforcePrimaryCloudOnBullets(finalBullets, primaryCloudGuard);
         }
@@ -1365,8 +1443,10 @@ function applyOps(tex, ops, opts = {}) {
         out = replaceSectionBullets(out, sec.name, finalBullets);
       } else if (op.op === "replace_skill_csv") {
         if (!op.label || !op.csv) continue;
-        const sanitizedCsv = op.csv.replace(/\\textbf\{/g, "").replace(/}/g, "");
-        out = replaceSkillLine(out, op.label, escapeLatex(sanitizedCsv));
+        const sanitizedCsv = op.csv
+          .replace(/\\textbf\{/g, "")
+          .replace(/[{}]/g, ""); // guard against stray braces that break LaTeX
+        out = replaceSkillLine(out, op.label, sanitizedCsv);
       }
     } catch (e) {
       console.warn("Failed to apply op", op, e);
@@ -1680,7 +1760,16 @@ Vipul Charugundla`;
   let generationToken = null;
 
   (async () => {
-    const { jd, company, location, prompt, primaryLanguage, categoryId, selectedProjectIds } = msg.payload || {};
+    const {
+      jd,
+      company,
+      location,
+      prompt,
+      primaryStack,
+      categoryId,
+      selectedProjectIds,
+      onlySkillsMode = false,
+    } = msg.payload || {};
     const { resumeData: DB } = await chrome.storage.local.get("resumeData");
     const locationDisplay = resolveLocation(location, DB?.location);
 
@@ -1692,14 +1781,20 @@ Vipul Charugundla`;
     generationToken = `gen_${Date.now()}_${Math.random()
       .toString(36)
       .slice(2)}`;
-    await mergePopupState({
-      generationToken,
-      generationStartedAt: Date.now(),
-      status: "Building .tex + Planning + Rewriting + Compiling...",
-      pdfB64: "",
-      pdfFilename: "",
-      generationInBackground: true,
-    });
+    const initialStatus = onlySkillsMode
+      ? "Updating skills + location only..."
+      : "Building .tex + Planning + Rewriting + Compiling...";
+    await mergePopupState(
+      {
+        generationToken,
+        generationStartedAt: Date.now(),
+        status: initialStatus,
+        pdfB64: "",
+        pdfFilename: "",
+        generationInBackground: true,
+      },
+      { token: generationToken }
+    );
 
     // --- 1) Build LaTeX with dynamic Projects (marker first, fallback to section) ---
     let latex = category.latex;
@@ -1766,27 +1861,30 @@ ${bullets}
 
     // Build targeting lists (JD-first so the model pivots aggressively to the JD)
     const inResumeKeywords = collectResumeSkillKeywords(latex); // from Skills section
-    const targetKeywords = Array.from(
-      new Set([
-        ...skillsMissing,        // JD-derived, highest priority
-        ...importantMissing,     // JD-derived high-impact concepts
-        ...categoryKeywords,     // category hints, lowest priority
-      ])
-    ).filter(Boolean);
-
-    const primaryLanguageGuard = buildPrimaryLanguageGuard(primaryLanguage || "");
-    const primaryLanguageHint = primaryLanguageGuard?.displayList?.join(" / ") || (primaryLanguage || "");
+    const primaryStackList = normalizePrimaryStack(primaryStack || "");
     const primaryCloudGuard = detectPreferredCloudProvider(jd);
     const primaryCloudHint = primaryCloudGuard?.display || "";
+    let finalLatex = latex;
 
-    // Pass 1: role-aware bullet rewrites (applies to Work Experience + Projects)
-    const bulletOps = await geminiPlan(apikey, company, jd, prompt, latex, {
-      targetKeywords,
-      inResumeKeywords,
-      primaryLanguage: primaryLanguageHint,
-      primaryCloudHint,
-    });
-    let finalLatex = applyOps(latex, bulletOps, { primaryLanguageGuard, primaryCloudGuard });
+    if (!onlySkillsMode) {
+      const targetKeywords = Array.from(
+        new Set([
+          ...primaryStackList,     // user-provided focus stack
+          ...skillsMissing,        // JD-derived, highest priority
+          ...importantMissing,     // JD-derived high-impact concepts
+          ...categoryKeywords,     // category hints, lowest priority
+        ])
+      ).filter(Boolean);
+
+      // Pass 1: role-aware bullet rewrites (applies to Work Experience + Projects)
+      const bulletOps = await geminiPlan(apikey, company, jd, prompt, latex, {
+        targetKeywords,
+        inResumeKeywords,
+        primaryStack: primaryStackList,
+        primaryCloudHint,
+      });
+      finalLatex = applyOps(latex, bulletOps, { primaryCloudGuard });
+    }
 
 
     // Pass 2: skills refinement
@@ -1794,7 +1892,7 @@ ${bullets}
       "Programming Languages",
       "Frameworks & Libraries",
       "Databases",
-      "Tools",
+      "Tools and Technologies",
       "Cloud & DevOps",
       "Development Practices",
       "Certifications",
@@ -1807,8 +1905,10 @@ ${bullets}
         skills[lab] = stripLatex(line.items);
       }
     }
-    const skillOps = await geminiRefineSkills(apikey, jd, skills, skillsMissing);
+    const mustIncludeSkills = Array.from(new Set([...primaryStackList, ...skillsMissing]));
+    const skillOps = await geminiRefineSkills(apikey, jd, skills, mustIncludeSkills);
     finalLatex = applyOps(finalLatex, skillOps);
+    finalLatex = normalizeAllSkillLines(finalLatex);
 
     // Contact header location (defaulting if none provided)
     finalLatex = applyLocationToLatex(finalLatex, locationDisplay);

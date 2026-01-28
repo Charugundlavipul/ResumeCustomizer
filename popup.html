@@ -198,6 +198,19 @@
       transform: none;
     }
 
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 16px;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .checkbox-row span {
+      color: var(--muted);
+    }
+
     .button-row {
       display: flex;
       gap: 12px;
@@ -512,16 +525,22 @@
           <label for="jd">5. Job Description</label>
           <textarea id="jd" placeholder="Paste the full JD..."></textarea>
 
-          <label for="primaryLanguage">6. Primary JD Language (optional)</label>
-          <input id="primaryLanguage" type="text" placeholder="e.g., Go (when JD lists Java/Go/Rust)">
+          <label for="primaryStack">6. Primary Tech Stack (optional)</label>
+          <input id="primaryStack" type="text" placeholder="e.g., Python, Django, AWS">
 
           <label for="prompt">7. Rewrite Prompt (optional)</label>
           <textarea id="prompt" placeholder="e.g., Emphasize my cloud experience..."></textarea>
         </div>
 
+        <div class="checkbox-row">
+          <input id="onlySkillsMode" type="checkbox">
+          <span>Only update skills (no bullet rewrites)</span>
+        </div>
+
         <div class="button-row">
           <button id="generate" class="primary" type="button">Generate Resume</button>
           <a id="downloadPdf" class="link-btn" download="vipul_charugundla.pdf">Download PDF</a>
+          <button id="copyLatex" class="link-btn" type="button" style="display:none;">Copy LaTeX</button>
           <button id="openSettings" class="icon-btn" type="button" title="Settings">⚙️</button>
         </div>
       </div>
