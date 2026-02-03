@@ -1,13 +1,118 @@
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
 
+  const GOOGLE_KEY_UI = {
+    input: "googleKeyInput",
+    list: "googleKeyList",
+    add: "addGoogleKey",
+  };
+  const GROQ_KEY_UI = {
+    input: "groqKeyInput",
+    list: "groqKeyList",
+    add: "addGroqKey",
+  };
+
+  const ensureModelDefaults = (raw) => {
+    const base = {
+      apikey: "",
+      groqApiKey: "",
+      location: "",
+      categories: [],
+      projects: [],
+      modelKeys: { google: [], groq: [] },
+      modelKeyIndex: { google: 0, groq: 0 },
+      modelKeySelection: { google: "", groq: "" },
+    };
+    const merged = { ...base, ...(raw || {}) };
+    merged.categories = Array.isArray(merged.categories) ? merged.categories : [];
+    merged.projects = Array.isArray(merged.projects) ? merged.projects : [];
+    merged.modelKeys = merged.modelKeys || {};
+    if (!Array.isArray(merged.modelKeys.google)) merged.modelKeys.google = [];
+    if (!Array.isArray(merged.modelKeys.groq)) merged.modelKeys.groq = [];
+    // Migrate legacy string keys -> objects with id/name/key
+    merged.modelKeys.google = merged.modelKeys.google
+      .map((entry, idx) => {
+        if (entry && typeof entry === "object" && entry.key) {
+          return {
+            id: entry.id || `gk-${Date.now()}-${idx}`,
+            name: entry.name || `Key ${idx + 1}`,
+            key: String(entry.key),
+            tier: entry.tier || "unpaid",
+          };
+        }
+        if (typeof entry === "string") {
+          return {
+            id: `gk-${Date.now()}-${idx}`,
+            name: `Key ${idx + 1}`,
+            key: entry,
+            tier: "unpaid",
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    merged.modelKeys.groq = merged.modelKeys.groq
+      .map((entry, idx) => {
+        if (entry && typeof entry === "object" && entry.key) {
+          return {
+            id: entry.id || `gq-${Date.now()}-${idx}`,
+            name: entry.name || `Key ${idx + 1}`,
+            key: String(entry.key),
+            tier: entry.tier || "unpaid",
+          };
+        }
+        if (typeof entry === "string") {
+          return {
+            id: `gq-${Date.now()}-${idx}`,
+            name: `Key ${idx + 1}`,
+            key: entry,
+            tier: "unpaid",
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    merged.modelKeyIndex = merged.modelKeyIndex || { google: 0, groq: 0 };
+    merged.modelKeySelection = merged.modelKeySelection || { google: "", groq: "" };
+    if (merged.apikey && merged.modelKeys.google.length === 0) {
+      merged.modelKeys.google = [
+        { id: `gk-${Date.now()}-0`, name: "Primary", key: merged.apikey, tier: "unpaid" },
+      ];
+    }
+    if (!merged.apikey && merged.modelKeys.google.length > 0) {
+      merged.apikey = merged.modelKeys.google[0].key;
+    }
+    if (!merged.modelKeySelection.google && merged.modelKeys.google.length > 0) {
+      merged.modelKeySelection.google = merged.modelKeys.google[0].id;
+    }
+    if (merged.groqApiKey && merged.modelKeys.groq.length === 0) {
+      merged.modelKeys.groq = [
+        { id: `gq-${Date.now()}-0`, name: "Primary", key: merged.groqApiKey, tier: "unpaid" },
+      ];
+    }
+    if (!merged.groqApiKey && merged.modelKeys.groq.length > 0) {
+      merged.groqApiKey = merged.modelKeys.groq[0].key;
+    }
+    if (!merged.modelKeySelection.groq && merged.modelKeys.groq.length > 0) {
+      merged.modelKeySelection.groq = merged.modelKeys.groq[0].id;
+    }
+    // Legacy migrations
+    if (!merged.groqApiKey && merged.modelKeys["groq-llama"]?.length) {
+      merged.groqApiKey = merged.modelKeys["groq-llama"][0];
+    }
+    if (!merged.groqApiKey && merged.modelKeys["groq-oss120"]?.length) {
+      merged.groqApiKey = merged.modelKeys["groq-oss120"][0];
+    }
+    return merged;
+  };
+
   // --- State & Storage ---
-  let DB = { apikey: "", location: "", categories: [], projects: [] };
+  let DB = ensureModelDefaults();
 
   const storage = {
     get: () =>
       new Promise(res =>
-        chrome.storage.local.get("resumeData", v => res(v.resumeData || DB))
+        chrome.storage.local.get("resumeData", v => res(ensureModelDefaults(v.resumeData)))
       ),
     set: (data) =>
       new Promise(res => chrome.storage.local.set({ resumeData: data }, res)),
@@ -77,6 +182,78 @@ document.addEventListener("DOMContentLoaded", () => {
       .map(i => i.value.trim())
       .filter(Boolean);
   }
+
+  // --- Model key helpers ---
+  const maskKey = (key) => {
+    const tail = String(key || "").slice(-4);
+    return tail ? `****${tail}` : "****";
+  };
+
+  const renderGoogleKeyList = () => {
+    const listEl = $(GOOGLE_KEY_UI.list);
+    if (!listEl) return;
+    const keys = DB.modelKeys?.google || [];
+    listEl.innerHTML = "";
+    if (!keys.length) {
+      listEl.innerHTML = `<p class="muted">No keys saved.</p>`;
+      return;
+    }
+    keys.forEach((entry, idx) => {
+      const item = document.createElement("div");
+      item.className = "key-item";
+      const isSelected = DB.modelKeySelection?.google === entry.id;
+      const tier = entry.tier === "paid" ? "Paid" : "Unpaid";
+      item.innerHTML = `
+        <div class="key-meta">
+          <label>
+            <input type="radio" name="googleKeySelect" data-id="${entry.id}" ${isSelected ? "checked" : ""}>
+            Use
+          </label>
+          <span>${entry.name || `Key ${idx + 1}`}</span>
+          <span>${tier}</span>
+          <span>${maskKey(entry.key)}</span>
+        </div>
+        <div class="key-actions">
+          <button class="small ghost" data-provider="google" data-action="edit" data-id="${entry.id}">Edit</button>
+          <button class="small danger" data-provider="google" data-action="remove" data-id="${entry.id}">Remove</button>
+        </div>
+      `;
+      listEl.appendChild(item);
+    });
+  };
+
+  const renderGroqKeyList = () => {
+    const listEl = $(GROQ_KEY_UI.list);
+    if (!listEl) return;
+    const keys = DB.modelKeys?.groq || [];
+    listEl.innerHTML = "";
+    if (!keys.length) {
+      listEl.innerHTML = `<p class="muted">No keys saved.</p>`;
+      return;
+    }
+    keys.forEach((entry, idx) => {
+      const item = document.createElement("div");
+      item.className = "key-item";
+      const isSelected = DB.modelKeySelection?.groq === entry.id;
+      const tier = entry.tier === "paid" ? "Paid" : "Unpaid";
+      item.innerHTML = `
+        <div class="key-meta">
+          <label>
+            <input type="radio" name="groqKeySelect" data-id="${entry.id}" ${isSelected ? "checked" : ""}>
+            Use
+          </label>
+          <span>${entry.name || `Key ${idx + 1}`}</span>
+          <span>${tier}</span>
+          <span>${maskKey(entry.key)}</span>
+        </div>
+        <div class="key-actions">
+          <button class="small ghost" data-provider="groq" data-action="edit" data-id="${entry.id}">Edit</button>
+          <button class="small danger" data-provider="groq" data-action="remove" data-id="${entry.id}">Remove</button>
+        </div>
+      `;
+      listEl.appendChild(item);
+    });
+  };
 
   // --- UI Rendering ---
   const renderCategories = () => {
@@ -191,18 +368,208 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Event Handlers ---
   const setupEventListeners = () => {
-    // API Key & Settings
-    $("saveApiKey").addEventListener("click", async () => {
-      DB.apikey = $("apikey").value.trim();
+    // Model provider & settings
+    $("saveSettings").addEventListener("click", async () => {
       DB.location = $("defaultLocation").value.trim();
       await storage.set(DB);
-      // robust to minor id typos in HTML
-      const stateEl = $("apikeyState") || $("apikeytate") || $("apikeyStatus");
+      const stateEl = $("settingsState");
       if (stateEl) {
         stateEl.textContent = "Saved";
         setTimeout(() => { stateEl.textContent = ""; }, 2000);
       }
     });
+
+    // Google API key management (multi-key)
+    (() => {
+      const btn = $(GOOGLE_KEY_UI.add);
+      const input = $(GOOGLE_KEY_UI.input);
+      const nameInput = $("googleKeyNameInput");
+      const tierInput = $("googleKeyTier");
+      let editId = "";
+      if (btn && input) {
+        btn.addEventListener("click", async () => {
+          const key = input.value.trim();
+          const rawName = (nameInput?.value || "").trim();
+          const tier = (tierInput?.value || "unpaid").trim();
+          if (!key && !editId) return;
+
+          if (editId) {
+            const idx = (DB.modelKeys.google || []).findIndex((k) => k.id === editId);
+            if (idx > -1) {
+              const existing = DB.modelKeys.google[idx];
+              DB.modelKeys.google[idx] = {
+                ...existing,
+                name: rawName || existing.name,
+                key: key || existing.key,
+                tier: tier || existing.tier || "unpaid",
+              };
+              if (DB.modelKeySelection?.google === editId) {
+                DB.apikey = DB.modelKeys.google[idx].key;
+              }
+            }
+            editId = "";
+            btn.textContent = "Add Key";
+          } else {
+            const name = rawName || `Key ${DB.modelKeys.google.length + 1}`;
+            const id = `gk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            DB.modelKeys.google = [
+              ...(DB.modelKeys.google || []),
+              { id, name, key, tier },
+            ];
+            if (!DB.apikey) DB.apikey = key;
+            if (!DB.modelKeySelection?.google) {
+              DB.modelKeySelection = { ...(DB.modelKeySelection || {}), google: id };
+            }
+          }
+          input.value = "";
+          if (nameInput) nameInput.value = "";
+          if (tierInput) tierInput.value = "unpaid";
+          await storage.set(DB);
+          renderGoogleKeyList();
+        });
+      }
+
+      const listEl = $(GOOGLE_KEY_UI.list);
+      if (listEl) {
+        listEl.addEventListener("click", async (e) => {
+          const radio = e.target.closest("input[type='radio'][name='googleKeySelect']");
+          if (radio) {
+            const id = radio.dataset.id;
+            DB.modelKeySelection = { ...(DB.modelKeySelection || {}), google: id };
+            const selected = (DB.modelKeys.google || []).find((k) => k.id === id);
+            if (selected?.key) DB.apikey = selected.key;
+            await storage.set(DB);
+            renderGoogleKeyList();
+            return;
+          }
+          const actionBtn = e.target.closest("button[data-action][data-id]");
+          if (!actionBtn) return;
+          const action = actionBtn.dataset.action;
+          const id = actionBtn.dataset.id;
+          if (action === "edit") {
+            const entry = (DB.modelKeys.google || []).find((k) => k.id === id);
+            if (!entry) return;
+            editId = id;
+            input.value = "";
+            if (nameInput) nameInput.value = entry.name || "";
+            if (tierInput) tierInput.value = entry.tier || "unpaid";
+            input.focus();
+            btn.textContent = "Update Key";
+            return;
+          }
+          if (action === "remove") {
+            const removed = (DB.modelKeys.google || []).find((k) => k.id === id);
+            DB.modelKeys.google = (DB.modelKeys.google || []).filter((k) => k.id !== id);
+            if (removed?.id && DB.modelKeySelection?.google === removed.id) {
+              const next = DB.modelKeys.google[0];
+              DB.modelKeySelection = { ...(DB.modelKeySelection || {}), google: next?.id || "" };
+              DB.apikey = next?.key || "";
+            }
+            if (!DB.apikey && DB.modelKeys.google[0]?.key) {
+              DB.apikey = DB.modelKeys.google[0].key;
+            }
+            await storage.set(DB);
+            renderGoogleKeyList();
+          }
+        });
+      }
+    })();
+
+    // Groq API key management (multi-key)
+    (() => {
+      const btn = $(GROQ_KEY_UI.add);
+      const input = $(GROQ_KEY_UI.input);
+      const nameInput = $("groqKeyNameInput");
+      const tierInput = $("groqKeyTier");
+      let editId = "";
+      if (btn && input) {
+        btn.addEventListener("click", async () => {
+          const key = input.value.trim();
+          const rawName = (nameInput?.value || "").trim();
+          const tier = (tierInput?.value || "unpaid").trim();
+          if (!key && !editId) return;
+
+          if (editId) {
+            const idx = (DB.modelKeys.groq || []).findIndex((k) => k.id === editId);
+            if (idx > -1) {
+              const existing = DB.modelKeys.groq[idx];
+              DB.modelKeys.groq[idx] = {
+                ...existing,
+                name: rawName || existing.name,
+                key: key || existing.key,
+                tier: tier || existing.tier || "unpaid",
+              };
+              if (DB.modelKeySelection?.groq === editId) {
+                DB.groqApiKey = DB.modelKeys.groq[idx].key;
+              }
+            }
+            editId = "";
+            btn.textContent = "Add Key";
+          } else {
+            const name = rawName || `Key ${DB.modelKeys.groq.length + 1}`;
+            const id = `gq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            DB.modelKeys.groq = [
+              ...(DB.modelKeys.groq || []),
+              { id, name, key, tier },
+            ];
+            if (!DB.groqApiKey) DB.groqApiKey = key;
+            if (!DB.modelKeySelection?.groq) {
+              DB.modelKeySelection = { ...(DB.modelKeySelection || {}), groq: id };
+            }
+          }
+          input.value = "";
+          if (nameInput) nameInput.value = "";
+          if (tierInput) tierInput.value = "unpaid";
+          await storage.set(DB);
+          renderGroqKeyList();
+        });
+      }
+
+      const listEl = $(GROQ_KEY_UI.list);
+      if (listEl) {
+        listEl.addEventListener("click", async (e) => {
+          const radio = e.target.closest("input[type='radio'][name='groqKeySelect']");
+          if (radio) {
+            const id = radio.dataset.id;
+            DB.modelKeySelection = { ...(DB.modelKeySelection || {}), groq: id };
+            const selected = (DB.modelKeys.groq || []).find((k) => k.id === id);
+            if (selected?.key) DB.groqApiKey = selected.key;
+            await storage.set(DB);
+            renderGroqKeyList();
+            return;
+          }
+          const actionBtn = e.target.closest("button[data-action][data-id]");
+          if (!actionBtn) return;
+          const action = actionBtn.dataset.action;
+          const id = actionBtn.dataset.id;
+          if (action === "edit") {
+            const entry = (DB.modelKeys.groq || []).find((k) => k.id === id);
+            if (!entry) return;
+            editId = id;
+            input.value = "";
+            if (nameInput) nameInput.value = entry.name || "";
+            if (tierInput) tierInput.value = entry.tier || "unpaid";
+            input.focus();
+            btn.textContent = "Update Key";
+            return;
+          }
+          if (action === "remove") {
+            const removed = (DB.modelKeys.groq || []).find((k) => k.id === id);
+            DB.modelKeys.groq = (DB.modelKeys.groq || []).filter((k) => k.id !== id);
+            if (removed?.id && DB.modelKeySelection?.groq === removed.id) {
+              const next = DB.modelKeys.groq[0];
+              DB.modelKeySelection = { ...(DB.modelKeySelection || {}), groq: next?.id || "" };
+              DB.groqApiKey = next?.key || "";
+            }
+            if (!DB.groqApiKey && DB.modelKeys.groq[0]?.key) {
+              DB.groqApiKey = DB.modelKeys.groq[0].key;
+            }
+            await storage.set(DB);
+            renderGroqKeyList();
+          }
+        });
+      }
+    })();
 
     // Modals
     $("showCategoryModalBtn").addEventListener("click", () => categoryModal.show());
@@ -364,9 +731,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Initialization ---
   const load = async () => {
-    DB = { apikey: "", location: "", categories: [], projects: [], ...(await storage.get()) };
-    $("apikey").value = DB.apikey || "";
+    DB = ensureModelDefaults(await storage.get());
     $("defaultLocation").value = DB.location || "";
+    renderGoogleKeyList();
+    renderGroqKeyList();
     renderAll();
   };
 

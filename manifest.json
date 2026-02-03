@@ -17,6 +17,7 @@
   ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",
+    "https://api.groq.com/*",
     "https://latexonline.cc/*",
     "https://texlive.net/*"
   ],
@@ -24,6 +25,6 @@
     "service_worker": "background.js"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com https://latexonline.cc https://texlive.net https://*.texlive.net;"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com https://api.groq.com https://latexonline.cc https://texlive.net https://*.texlive.net;"
   }
 }

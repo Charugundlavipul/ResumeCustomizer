@@ -35,6 +35,13 @@ const GEMINI_BULLET_FORMAT = "TEXT"; // "TEXT" | "LATEX"
 /** Strictly keep bullet counts; no visible suffix, no metric appenders */
 const ENFORCE_METRIC_VISIBILITY = false; // never append "(retained metrics: ...)" text
 
+const GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GEMINI_MODELS = {
+  default: "gemini-2.5-flash",
+  cover: "gemini-2.5-flash-lite",
+};
+const GROQ_OSS_MODEL = "openai/gpt-oss-120b";
+
 const POPUP_STATE_KEY = "popupState";
 
 // Track one popup window per originating tab
@@ -132,6 +139,110 @@ async function mergePopupState(partial, { token, overwrite = false } = {}) {
   } catch (err) {
     console.warn("Failed to merge popup state", err);
   }
+}
+
+// --- Settings helpers ---
+function normalizeSettings(DB) {
+  const next = { ...(DB || {}) };
+  next.apikey = next.apikey || "";
+  next.groqApiKey = next.groqApiKey || "";
+  next.modelKeys = next.modelKeys || {};
+  if (!Array.isArray(next.modelKeys.google)) next.modelKeys.google = [];
+  if (!Array.isArray(next.modelKeys.groq)) next.modelKeys.groq = [];
+  next.modelKeySelection = next.modelKeySelection || { google: "", groq: "" };
+  next.modelKeyIndex = next.modelKeyIndex || { google: 0, groq: 0 };
+  // Migrate legacy string keys -> objects
+  next.modelKeys.google = next.modelKeys.google
+    .map((entry, idx) => {
+      if (entry && typeof entry === "object" && entry.key) {
+        return {
+          id: entry.id || `gk-${Date.now()}-${idx}`,
+          name: entry.name || `Key ${idx + 1}`,
+          key: String(entry.key),
+          tier: entry.tier || "unpaid",
+        };
+      }
+      if (typeof entry === "string") {
+        return {
+          id: `gk-${Date.now()}-${idx}`,
+          name: `Key ${idx + 1}`,
+          key: entry,
+          tier: "unpaid",
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+  next.modelKeys.groq = next.modelKeys.groq
+    .map((entry, idx) => {
+      if (entry && typeof entry === "object" && entry.key) {
+        return {
+          id: entry.id || `gq-${Date.now()}-${idx}`,
+          name: entry.name || `Key ${idx + 1}`,
+          key: String(entry.key),
+          tier: entry.tier || "unpaid",
+        };
+      }
+      if (typeof entry === "string") {
+        return {
+          id: `gq-${Date.now()}-${idx}`,
+          name: `Key ${idx + 1}`,
+          key: entry,
+          tier: "unpaid",
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+  if (next.apikey && next.modelKeys.google.length === 0) {
+    next.modelKeys.google = [
+      { id: `gk-${Date.now()}-0`, name: "Primary", key: next.apikey, tier: "unpaid" },
+    ];
+  }
+  if (!next.apikey && next.modelKeys.google.length > 0) {
+    next.apikey = next.modelKeys.google[0].key;
+  }
+  if (!next.modelKeySelection.google && next.modelKeys.google.length > 0) {
+    next.modelKeySelection.google = next.modelKeys.google[0].id;
+  }
+  if (next.groqApiKey && next.modelKeys.groq.length === 0) {
+    next.modelKeys.groq = [
+      { id: `gq-${Date.now()}-0`, name: "Primary", key: next.groqApiKey, tier: "unpaid" },
+    ];
+  }
+  if (!next.groqApiKey && next.modelKeys.groq.length > 0) {
+    next.groqApiKey = next.modelKeys.groq[0].key;
+  }
+  if (!next.modelKeySelection.groq && next.modelKeys.groq.length > 0) {
+    next.modelKeySelection.groq = next.modelKeys.groq[0].id;
+  }
+  if (!next.groqApiKey && next.modelKeys["groq-llama"]?.length) {
+    next.groqApiKey = next.modelKeys["groq-llama"][0];
+  }
+  if (!next.groqApiKey && next.modelKeys["groq-oss120"]?.length) {
+    next.groqApiKey = next.modelKeys["groq-oss120"][0];
+  }
+  return next;
+}
+
+function pickGeminiApiKey(DB) {
+  const selectedId = DB.modelKeySelection?.google;
+  const selected = (DB.modelKeys?.google || []).find((k) => k.id === selectedId);
+  const key = selected?.key || DB.modelKeys?.google?.[0]?.key || DB.apikey;
+  if (!key) throw new Error("Missing Gemini API key in Options.");
+  return key;
+}
+
+function pickGroqApiKey(DB) {
+  const selectedId = DB.modelKeySelection?.groq;
+  const selected = (DB.modelKeys?.groq || []).find((k) => k.id === selectedId);
+  const key = selected?.key || DB.modelKeys?.groq?.[0]?.key || DB.groqApiKey;
+  if (!key) throw new Error("Missing Groq API key in Options.");
+  return key;
+}
+
+function getGeminiModel(task = "default") {
+  return task === "cover" ? GEMINI_MODELS.cover : GEMINI_MODELS.default;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -265,7 +376,7 @@ function extractBalancedJsonSegment(src) {
   return null;
 }
 
-function safeJsonFromGemini(raw) {
+function safeJsonFromGemini(raw, { quiet = false } = {}) {
   if (!raw) return null;
   let txt = String(raw).trim();
 
@@ -310,7 +421,7 @@ function safeJsonFromGemini(raw) {
   }
 
   // Give up
-  console.warn("safeJsonFromGemini: unable to parse:", raw);
+  if (!quiet) console.warn("safeJsonFromGemini: unable to parse:", raw);
   return null;
 }
 
@@ -425,19 +536,42 @@ function bruteForceOpsObject(raw) {
   return null;
 }
 
-async function robustGeminiParse(resp) {
+function coerceOpsFromLooseMap(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const entries = Object.entries(parsed).filter(
+    ([, v]) => Array.isArray(v) && v.every((item) => typeof item === "string")
+  );
+  if (!entries.length) return null;
+  return {
+    ops: entries.map(([section, bullets]) => ({
+      op: "replace_bullets",
+      section,
+      bullets,
+    })),
+  };
+}
+
+async function robustGeminiParse(resp, { allowLooseMap = false, quiet = false } = {}) {
   const raw = resp?.trim?.() || "";
 
   // 1) Try direct parse first (fast path)
   try {
     const direct = JSON.parse(raw);
     if (direct?.ops && Array.isArray(direct.ops)) return direct;
+    if (allowLooseMap) {
+      const coerced = coerceOpsFromLooseMap(direct);
+      if (coerced) return coerced;
+    }
   } catch (_) { }
 
   // 2) Our sanitizer
-  const parsed = safeJsonFromGemini(raw);
+  const parsed = safeJsonFromGemini(raw, { quiet });
   if (parsed?.ops && Array.isArray(parsed.ops)) return parsed;
   if (Array.isArray(parsed)) return { ops: parsed };
+  if (allowLooseMap) {
+    const coerced = coerceOpsFromLooseMap(parsed);
+    if (coerced) return coerced;
+  }
 
   // 3) Targeted extractors (keep your helpers)
   const opsObj = extractOpsObject(raw);
@@ -457,7 +591,9 @@ async function robustGeminiParse(resp) {
     if (candidate) return { ops: candidate };
   }
 
-  console.error(" GEMINI reply could not be parsed into a valid {ops: []} structure ↓↓↓\n" + raw);
+  if (!quiet) {
+    console.error(" GEMINI reply could not be parsed into a valid {ops: []} structure ↓↓↓\n" + raw);
+  }
   return { ops: [] };
 }
 
@@ -478,6 +614,203 @@ function formatSectionDump(sections, maxChars = 7000) {
   return out.trim();
 }
 
+
+async function callGeminiGenerate(apikey, model, prompt, generationConfig) {
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig,
+  };
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+      apikey
+    )}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) throw new Error(`Gemini API error: ${res.status}`);
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+}
+
+async function groqChatCompletion(
+  apikey,
+  {
+    model,
+    messages,
+    temperature,
+    topP,
+    maxTokens,
+    responseFormat,
+    reasoningFormat,
+    includeReasoning,
+    reasoningEffort,
+    stop,
+    stream,
+  }
+) {
+  const payload = {
+    model,
+    messages,
+    temperature,
+    top_p: topP,
+  };
+  if (maxTokens) payload.max_completion_tokens = maxTokens;
+  if (stream !== undefined) payload.stream = stream;
+  if (responseFormat) payload.response_format = responseFormat;
+  if (reasoningFormat) payload.reasoning_format = reasoningFormat;
+  if (includeReasoning !== undefined) payload.include_reasoning = includeReasoning;
+  if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
+  if (stop) payload.stop = stop;
+
+  const res = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apikey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Groq API error: ${res.status}`);
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content || "";
+}
+
+async function extractMissingWithGroq(apikey, jd, userKeywords = []) {
+  if (!apikey) throw new Error("Missing Groq API key for JD extraction.");
+  const prompt = `
+You are an expert ATS keyword extractor. Return one raw JSON object derived from the Job Description (JD) and the user keywords.
+
+TASK
+List the technical skills and important keywords present in the JD that the user list lacks.
+
+JSON OUTPUT ONLY:
+{ "skills": ["string"], "important": ["string"] }
+
+Key descriptions:
+- **skills**: Provide 4–10 technical items (frameworks, tools, databases) from the JD; omit course names and vague buzzwords, and limit development-practice entries to one or two intentional phrases (e.g., “CI/CD pipelines”).
+- **important**: Up to 10 high-impact keywords (methodologies, practices); exclude non-technical terms, academic degrees, leadership language, or compensation.
+
+RULES
+1. Keywords must be absent from the user-supplied list.
+2. Keywords must appear verbatim in the JD text.
+3. Each array cannot exceed 12 items.
+4. Discard academic credentials, mission/leadership language, and compensation references; keep only technical nouns or methodologies.
+
+INPUTS
+JD Text:
+${String(jd || "").slice(0, 8000)}
+User-Supplied Keywords:
+${(userKeywords || []).join(", ")}`.trim();
+
+  const runGroq = async (p, maxTokens) =>
+    groqChatCompletion(apikey, {
+      model: GROQ_OSS_MODEL,
+      messages: [{ role: "user", content: p }],
+      temperature: 0,
+      topP: 0.6,
+      maxTokens,
+      responseFormat: { type: "json_object" },
+      reasoningFormat: "hidden",
+      reasoningEffort: "medium",
+    });
+
+  let text = await runGroq(prompt, 5000);
+  if (!text) {
+    const retryPrompt = `
+Return ONLY JSON in this exact shape:
+{ "skills": ["string"], "important": ["string"] }
+
+JD Text:
+${String(jd || "").slice(0, 4000)}
+User Keywords:
+${(userKeywords || []).join(", ")}
+`.trim();
+    text = await runGroq(retryPrompt, 5000);
+  }
+
+  if (!text) {
+    throw new Error("Groq JD extraction returned empty content.");
+  }
+
+  const obj = safeJsonFromGemini(text || "{}", { quiet: true }) || {};
+  return {
+    skillsMissing: Array.isArray(obj?.skills) ? obj.skills : [],
+    importantMissing: Array.isArray(obj?.important) ? obj.important : [],
+  };
+}
+
+async function generateProfessionalSummaryGroq(apikey, jd, resumeLatex, missingKeywords, currentSummary) {
+  if (!apikey) return "";
+
+  const missingList = (missingKeywords || []).filter(Boolean).slice(0, 8);
+  const missingText = missingList.length ? missingList.join(", ") : "None";
+  const resumeContext = buildSummaryContext(resumeLatex);
+  const desiredYears = "3+ years";
+  const yearsRule = `- The summary must mention experience years as: "${desiredYears}".`;
+  const exampleSummary =
+    "Software Engineer with 3+ years of experience architecting high-throughput microservices and AI-driven platforms. Specialized in re-architecting legacy systems on AWS and GCP to minimize p99 latency and compute costs. Adept at driving technical design across cross-functional teams and implementing fault-tolerant patterns to ensure system reliability. Expert in delivering scalable, distributed architectures using Java, Spring Boot, Node.js, and React.";
+
+  const prompt = `
+You are an expert ATS resume writer. Write a single-paragraph Professional Summary that aligns strictly with the resume content below.
+
+RULES:
+- Output plain text only. No markdown, no bullets, no quotes.
+- Length must be 400–440 characters (count characters, including spaces).
+- Must align to the resume; do NOT invent experience or technologies.
+- ${yearsRule}
+- Include the missing JD keywords if possible: ${missingText}.
+- Keep it concise and professional.
+- Use the example below as a style template, but rewrite it to match the inputs.
+
+Example Summary (rewrite this based on inputs):
+${exampleSummary}
+
+Job Description:
+${String(jd || "").slice(0, 2500)}
+
+Resume Facts (condensed; use only what is true here):
+${resumeContext}
+
+Current Professional Summary:
+${String(currentSummary || "").slice(0, 1000)}
+`.trim();
+
+  const text = await groqChatCompletion(apikey, {
+    model: GROQ_OSS_MODEL,
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.3,
+    topP: 0.9,
+    maxTokens: 5000,
+    reasoningFormat: "hidden",
+    reasoningEffort: "low",
+  });
+
+  let out = String(text || "").trim();
+  if (desiredYears) {
+    out = enforceExperienceYears(out, desiredYears);
+    out = forceInsertExperienceYears(out, desiredYears);
+  }
+  return out;
+}
+
+async function generateGeminiText(
+  apikey,
+  { task = "default", prompt, temperature = 0.2, topP = 1, maxOutputTokens = 1024, responseMimeType, responseSchema, thinkingConfig } = {}
+) {
+  const generationConfig = {
+    temperature,
+    topP,
+    maxOutputTokens,
+  };
+  if (responseMimeType) generationConfig.responseMimeType = responseMimeType;
+  if (responseSchema) generationConfig.responseSchema = responseSchema;
+  if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+  return callGeminiGenerate(apikey, getGeminiModel(task), prompt, generationConfig);
+}
 
 async function geminiRefineSkills(apikey, jd, skillsLines, mustInclude = []) {
   const skillsDump = Object.entries(skillsLines)
@@ -500,6 +833,7 @@ You are an AI assistant that refines resume skill sections to match a job descri
 5. If you extract very few new skills from the job description, supplement by adding additional relevant skills while keeping every original entry intact-augment only, never remove.
 6. **No verb phrases**: Return ONLY noun-style skill tokens (tools, tech, platforms) of 1-3 words; never include verbs/phrases like "monitor system performance", "automated tests", "troubleshoot issues", "improve reliability", etc.
 7. For "Databases", only include actual database/storage engines or warehouses (e.g., Postgres, MongoDB, DynamoDB, Redis, Snowflake, BigQuery) and never add practices or concepts like "SQL query optimization" or "database internals". for programming languages only include programming languages
+8. **No duplicates within a line**: Ensure each line contains unique skill tokens only.
 
 ## INPUTS
 ### Job Description:
@@ -509,36 +843,17 @@ ${mustInclude.join(", ") || "None"}
 ### CURRENT SKILL LINES:
 ${skillsDump}`.trim();
 
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0,
-      topP: 0.7,
-      thinkingConfig: {
-        thinkingBudget: 3000,
-      },
-      maxOutputTokens: 4000,
-    },
-  };
+  const text = await generateGeminiText(apikey, {
+    task: "default",
+    prompt,
+    responseMimeType: "application/json",
+    temperature: 0,
+    topP: 0.7,
+    thinkingConfig: { thinkingBudget: 3000 },
+    maxOutputTokens: 4000,
+  });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
-      apikey
-    )}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini Refine Skills API error: ${res.status}`);
-  const data = await res.json();
-  return (
-    safeJsonFromGemini(
-      data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
-    )?.ops || []
-  );
+  return safeJsonFromGemini(text)?.ops || [];
 }
 
 async function geminiExtractMissing(apikey, jd, userKeywords = []) {
@@ -567,32 +882,15 @@ ${jd.slice(0, 8000)}
 User-Supplied Keywords:
 ${(userKeywords || []).join(", ")}`.trim();
 
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0,
+  const text = await generateGeminiText(apikey, {
+    task: "default",
+    prompt,
+    responseMimeType: "application/json",
+    temperature: 0,
+    maxOutputTokens: 6000,
+  });
 
-      maxOutputTokens: 6000,
-    },
-  };
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
-      apikey
-    )}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini Extract Missing API error: ${res.status}`);
-  const data = await res.json();
-  const obj =
-    safeJsonFromGemini(
-      data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}"
-    ) || {};
+  const obj = safeJsonFromGemini(text || "{}") || {};
   return {
     skillsMissing: Array.isArray(obj?.skills) ? obj.skills : [],
     importantMissing: Array.isArray(obj?.important) ? obj.important : [],
@@ -776,13 +1074,7 @@ when very few skills are available dont repeat the same skill again and again yo
   };
 
 
-  const payload = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `
+  const prompt = `
 ${refinedPolicy}
 ${instructionBlock}
 ## INPUTS
@@ -801,39 +1093,23 @@ ${sectionsDump}
 ### Required character-count window for each bullet (by position):
 [${windowReminder}]
 
-Return JSON only.`.trim(),
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema,                // ⬅️ moved here
-      temperature: 0.15,
-      topP: 0.8,
-      thinkingConfig: { thinkingBudget: 4400 },
-      maxOutputTokens: 8000,
-    },
-  };
+Return JSON only.`.trim();
 
+  const text = await generateGeminiText(apikey, {
+    task: "default",
+    prompt,
+    responseMimeType: "application/json",
+    responseSchema,
+    temperature: 0.15,
+    topP: 0.8,
+    thinkingConfig: { thinkingBudget: 4400 },
+    maxOutputTokens: 8000,
+  });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
-      apikey
-    )}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini Plan API error: ${res.status}`);
-  const data = await res.json();
-  const obj = await robustGeminiParse(
-    data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
-  );
+  const obj = await robustGeminiParse(text || "", { allowLooseMap: true });
+  const ops = obj.ops || [];
 
-  return obj.ops || [];
+  return ops;
 }
 
 
@@ -968,9 +1244,18 @@ function replaceSkillLine(tex, label, csv) {
     .filter(Boolean);
   const cleanedItems = sanitizeSkillItems(rawItems);
   const safeItems = cleanedItems.length ? cleanedItems : rawItems;
-  const deduped = [...new Set(safeItems.map((x) => x.toLowerCase()))].map((lc) =>
-    safeItems.find((x) => x.toLowerCase() === lc)
-  );
+  const deduped = [];
+  const seen = new Set();
+  const normalizeSkillKey = (item) =>
+    String(item || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9+#]/g, "");
+  for (const item of safeItems) {
+    const key = normalizeSkillKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
   const joined = deduped.join(", ");
   const escapedJoined = escapeLatex(joined);
   const normalizedLine = `\\item \\textbf{${escapedLabel}}: ${escapedJoined}\\vspace{-5pt}`;
@@ -1032,6 +1317,194 @@ function normalizeAllSkillLines(tex) {
     }
   }
   return out;
+}
+
+function stripLatexCommands(s) {
+  let t = String(s || "");
+  t = t.replace(/\\href\{[^}]*\}\{([^}]*)\}/g, "$1");
+  t = stripLatex(t);
+  t = t.replace(/\\[a-zA-Z@]+(?:\*?)?(?:\[[^\]]*])?/g, " ");
+  t = t.replace(/[{}]/g, " ");
+  t = t.replace(/\s+/g, " ").trim();
+  return t;
+}
+
+function buildSummaryContext(tex) {
+  const lines = [];
+
+  // Skills snapshot
+  const labels = [
+    "Programming Languages",
+    "Frameworks & Libraries",
+    "Databases",
+    "Tools and Technologies",
+    "Cloud & DevOps",
+    "Development Practices",
+  ];
+  const skillParts = [];
+  for (const lab of labels) {
+    const line = extractSkillLine(tex, lab);
+    if (!line?.items) continue;
+    const items = stripLatexCommands(line.items)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (items.length) skillParts.push(`${lab}: ${items.join(", ")}`);
+  }
+  if (skillParts.length) {
+    lines.push(`Skills: ${skillParts.join(" | ")}`);
+  }
+
+  // Bullet highlights (limit to 6)
+  const sections = allRewriteableSections(tex);
+  const highlights = [];
+  for (const sec of sections) {
+    const first = sec.bullets?.[0];
+    if (!first) continue;
+    const clean = stripLatexCommands(first).slice(0, 220);
+    if (clean) highlights.push(`${sec.name}: ${clean}`);
+    if (highlights.length >= 6) break;
+  }
+  if (highlights.length) {
+    lines.push("Highlights:");
+    lines.push(...highlights);
+  }
+
+  const out = lines.join("\n").trim();
+  return out.slice(0, 3500);
+}
+
+function getSummarySectionRegex() {
+  return /(\\section\*?\{\\s*Professional\\s+Summary\\s*\\}[\s\S]*?\\begin\{itemize\}(?:\[[^\]]*\])?)([\s\S]*?)(\\end\{itemize\})/i;
+}
+
+function hasProfessionalSummaryHeader(tex) {
+  return /\\section\*?\{\s*Professional\s+Summary\s*\}/i.test(tex);
+}
+
+function extractProfessionalSummary(tex) {
+  const re = getSummarySectionRegex();
+  const match = tex.match(re);
+  if (!match) return null;
+  const bullets = extractBulletsFromItemizeBody(match[2]);
+  return { pre: match[1], body: match[2], post: match[3], bullets };
+}
+
+function extractProfessionalSummaryText(tex) {
+  const itemized = extractProfessionalSummary(tex);
+  if (itemized?.bullets?.length) return itemized.bullets[0];
+
+  const leftskipRe =
+    /\\section\*?\{\s*Professional\s+Summary\s*\}[\s\S]*?\{\s*\\leftskip[^}]*?([\s\S]*?)\\par\s*\}/i;
+  const m = tex.match(leftskipRe);
+  if (m && m[1]) return stripLatexCommands(m[1]);
+  return "";
+}
+
+function extractExperienceYearsToken(text) {
+  const m = String(text || "").match(/\b(\d+)\s*(\+)?\s*(years?|yrs?)\b/i);
+  if (!m) return "";
+  const num = m[1];
+  const plus = m[2] ? "+" : "";
+  const unit = m[3] || "years";
+  return `${num}${plus} ${unit}`;
+}
+
+function enforceExperienceYears(summaryText, desiredToken) {
+  if (!desiredToken) return summaryText;
+  const re = /\b\d+\s*\+?\s*(years?|yrs?)\b/i;
+  if (!re.test(summaryText)) return summaryText;
+  return summaryText.replace(re, desiredToken);
+}
+
+function forceInsertExperienceYears(summaryText, desiredToken) {
+  if (!desiredToken) return summaryText;
+  const re = /\b\d+\s*\+?\s*(years?|yrs?)\b/i;
+  const cleaned = String(summaryText || "").replace(/\s+/g, " ").trim();
+  if (!cleaned || re.test(cleaned)) return cleaned;
+
+  const insert = ` with ${desiredToken} of experience`;
+  const cutCandidates = [cleaned.indexOf(","), cleaned.indexOf("."), cleaned.indexOf(" - "), cleaned.indexOf(" — ")].filter(
+    (i) => i > 0
+  );
+  const cut = cutCandidates.length ? Math.min(...cutCandidates) : -1;
+  if (cut > 0 && cut <= 80) {
+    return `${cleaned.slice(0, cut)}${insert}${cleaned.slice(cut)}`;
+  }
+
+  const words = cleaned.split(" ");
+  const headCount = Math.min(words.length, 8);
+  const head = words.slice(0, headCount).join(" ");
+  const rest = words.slice(headCount).join(" ");
+  return `${head}${insert}${rest ? " " + rest : ""}`;
+}
+
+function replaceProfessionalSummary(tex, summaryText) {
+  const safe = escapeLatex(String(summaryText || "").replace(/\s+/g, " ").trim());
+  if (!safe) return tex;
+
+  const sectionRe =
+    /(\\section\*?\{\s*Professional\s+Summary\s*\}[\s\S]*?)(?=\\section\*?\{|\\end\{document\})/i;
+  const sectionMatch = tex.match(sectionRe);
+  if (!sectionMatch) return tex;
+
+  const sectionBlock = sectionMatch[1];
+  let updatedBlock = sectionBlock;
+
+  const itemizeRe = /(\\begin\{itemize\}(?:\[[^\]]*\])?)([\s\S]*?)(\\end\{itemize\})/i;
+  if (itemizeRe.test(sectionBlock)) {
+    updatedBlock = sectionBlock.replace(
+      itemizeRe,
+      (_m, pre, _body, post) => `${pre}${buildItemizeBody([safe])}${post}`
+    );
+  } else {
+    const leftskipRe = /(\{\s*\\leftskip[^}]*?)([\s\S]*?)(\\par\s*\})/i;
+    if (leftskipRe.test(sectionBlock)) {
+      updatedBlock = sectionBlock.replace(
+        leftskipRe,
+        (_m, pre, _body, post) => `${pre} ${safe}${post}`
+      );
+    } else {
+      const headerWithSpaceRe =
+        /(\\section\*?\{\s*Professional\s+Summary\s*\}(?:\s*\\vspace\{[^}]+\})*)/i;
+      const insertBody =
+        `\n\\begin{itemize}[leftmargin=10pt,label={}]\n  \\item ${safe}\n\\end{itemize}`;
+      updatedBlock = sectionBlock.replace(headerWithSpaceRe, `$1${insertBody}`);
+    }
+  }
+
+  if (updatedBlock === sectionBlock) return tex;
+  return tex.replace(sectionBlock, updatedBlock);
+}
+
+function normalizeTextForSearch(text) {
+  return String(text || "")
+    .replace(/\\[a-zA-Z@]+(\*?)?(?:\[[^\]]*])?/g, " ")
+    .replace(/[{}]/g, " ")
+    .replace(/[^a-zA-Z0-9+#.]+/g, " ")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeKeyword(keyword) {
+  return String(keyword || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isKeywordPresent(searchText, keyword) {
+  const key = normalizeKeyword(keyword);
+  if (!key) return true;
+  return searchText.includes(key);
+}
+
+function getMissingKeywordsFromResume(resumeLatex, keywords) {
+  const searchText = normalizeTextForSearch(resumeLatex);
+  return (keywords || []).filter((k) => !isKeywordPresent(searchText, k));
 }
 
 const cleanName = (s) => String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim();
@@ -1566,32 +2039,14 @@ ${resumeLatex.slice(0, 8000)}
 Return the body text as plain text. Do not use Markdown or LaTeX syntax in the output.
 `.trim();
 
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.85, // Increased for more creativity/human-like variance
-      maxOutputTokens: 1000,
-    },
-  };
+  const text = await generateGeminiText(apikey, {
+    task: "cover",
+    prompt,
+    temperature: 0.85,
+    maxOutputTokens: 1000,
+  });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(
-      apikey
-    )}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error(`Gemini Cover Letter API error: ${res.status}`);
-  }
-
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  return text.trim();
+  return String(text || "").trim();
 }
 
 // IMPORTANT: Exactly one listener; no duplicates.
@@ -1602,12 +2057,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     let generationToken = null;
     (async () => {
       const { jd, company, location, clDetails, categoryId, selectedProjectIds } = msg.payload || {};
-      const { resumeData: DB } = await chrome.storage.local.get("resumeData");
+      const { resumeData: stored } = await chrome.storage.local.get("resumeData");
+      const DB = normalizeSettings(stored || {});
+      const apikey = pickGeminiApiKey(DB);
       const companyDisplay = formatCompanyName(company) || String(company || "").trim();
       const locationDisplay = resolveLocation(location, DB?.location);
       const locationLatex = escapeLatex(locationDisplay);
 
-      if (!DB?.apikey) throw new Error("Missing API key in Options.");
       const category = DB.categories.find((c) => c.id === categoryId);
       if (!category || !category.latex)
         throw new Error("Selected category not found or has no LaTeX template.");
@@ -1640,12 +2096,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const resumeContext = latex + "\n\nSelected Projects Details:\n" + projectLatexStrings;
 
       // 2. Generate Cover Letter Content
-      // User requested "gemini-2.5-flash-lite" (based on existing code usage).
-      // I will use the function I defined above which uses the model.
-      // Wait, I need to make sure I use the right model name.
-      // In the file, line 524 uses `gemini-2.5-flash-lite`. I will use that.
-
-      const bodyText = await geminiGenerateCoverLetter(DB.apikey, company, jd, clDetails, resumeContext, locationDisplay);
+      const bodyText = await geminiGenerateCoverLetter(apikey, company, jd, clDetails, resumeContext, locationDisplay);
 
       // 3. Wrap in LaTeX Template
       const escapedBody = escapeLatex(bodyText).replace(/\n\n/g, "\\par\\vspace{10pt}\n");
@@ -1682,7 +2133,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 \\begin{center}
     \\textbf{\\LARGE \\scshape Vipul Charugundla} \\\\ \\vspace{5pt}
     ${locationLatex} $|$ (716) 710-7704 $|$ charugundlavipul@gmail.com \\\\
-    \\href{https://www.linkedin.com/in/charugundla-vipul-3911561aa/}{LinkedIn} $|$ \\href{https://github.com/Charugundlavipul}{GitHub} $|$ \\href{https://vipulcharugundla.netlify.app/}{Portfolio}
+    \\href{https://www.linkedin.com/in/vipul-ch-2a07b5399/}{LinkedIn} $|$ \\href{https://github.com/Charugundlavipul}{GitHub} $|$ \\href{https://vipulcharugundla.netlify.app/}{Portfolio}
 \\end{center}
 \\vspace{0.3in}
 
@@ -1770,10 +2221,12 @@ Vipul Charugundla`;
       selectedProjectIds,
       onlySkillsMode = false,
     } = msg.payload || {};
-    const { resumeData: DB } = await chrome.storage.local.get("resumeData");
+    const forceSkillsOnly = false;
+    const skillsOnly = forceSkillsOnly || onlySkillsMode;
+    const { resumeData: stored } = await chrome.storage.local.get("resumeData");
+    const DB = normalizeSettings(stored || {});
+    const apikey = pickGeminiApiKey(DB);
     const locationDisplay = resolveLocation(location, DB?.location);
-
-    if (!DB?.apikey) throw new Error("Missing API key in Options.");
     const category = DB.categories.find((c) => c.id === categoryId);
     if (!category || !category.latex)
       throw new Error("Selected category not found or has no LaTeX template.");
@@ -1781,8 +2234,8 @@ Vipul Charugundla`;
     generationToken = `gen_${Date.now()}_${Math.random()
       .toString(36)
       .slice(2)}`;
-    const initialStatus = onlySkillsMode
-      ? "Updating skills + location only..."
+    const initialStatus = skillsOnly
+      ? "Updating skills + summary + location only..."
       : "Building .tex + Planning + Rewriting + Compiling...";
     await mergePopupState(
       {
@@ -1840,7 +2293,6 @@ ${bullets}
     }
 
     // --- 2) Refinement pipeline ---
-    const apikey = DB.apikey;
 
     // Normalize category keywords (string or array)
     const categoryKeywords = Array.isArray(category.keywords)
@@ -1851,8 +2303,9 @@ ${bullets}
         .filter(Boolean);
 
     // Extract JD gaps using category hints
-    const { skillsMissing, importantMissing } = await geminiExtractMissing(
-      apikey,
+    const groqKey = pickGroqApiKey(DB);
+    const { skillsMissing, importantMissing } = await extractMissingWithGroq(
+      groqKey,
       jd,
       categoryKeywords
     );
@@ -1866,7 +2319,7 @@ ${bullets}
     const primaryCloudHint = primaryCloudGuard?.display || "";
     let finalLatex = latex;
 
-    if (!onlySkillsMode) {
+    if (!skillsOnly) {
       const targetKeywords = Array.from(
         new Set([
           ...primaryStackList,     // user-provided focus stack
@@ -1907,8 +2360,35 @@ ${bullets}
     }
     const mustIncludeSkills = Array.from(new Set([...primaryStackList, ...skillsMissing]));
     const skillOps = await geminiRefineSkills(apikey, jd, skills, mustIncludeSkills);
-    finalLatex = applyOps(finalLatex, skillOps);
+    const safeSkillOps = Array.isArray(skillOps)
+      ? skillOps.filter((op) => op?.op === "replace_skill_csv")
+      : [];
+    finalLatex = applyOps(finalLatex, safeSkillOps);
     finalLatex = normalizeAllSkillLines(finalLatex);
+
+    // --- 2b) Professional Summary via Groq (qwen3-32b) ---
+    if (groqKey && hasProfessionalSummaryHeader(finalLatex)) {
+      const combinedKeywords = Array.from(new Set([
+        ...(skillsMissing || []),
+        ...(importantMissing || []),
+      ])).filter(Boolean);
+      const missingKeywords = getMissingKeywordsFromResume(finalLatex, combinedKeywords);
+      const currentSummary = extractProfessionalSummaryText(finalLatex);
+      const summaryText = await generateProfessionalSummaryGroq(
+        groqKey,
+        jd,
+        finalLatex,
+        missingKeywords,
+        currentSummary
+      );
+      const normalized = String(summaryText || "").replace(/\s+/g, " ").trim();
+      const len = normalized.length;
+      if (normalized && len >= 400) {
+        finalLatex = replaceProfessionalSummary(finalLatex, normalized);
+      } else {
+        console.warn(`[summary] Groq summary rejected (length ${len}). Keeping original summary.`);
+      }
+    }
 
     // Contact header location (defaulting if none provided)
     finalLatex = applyLocationToLatex(finalLatex, locationDisplay);
